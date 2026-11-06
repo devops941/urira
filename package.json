@@ -1,0 +1,19 @@
+{
+  "name": "uyira-workspace",
+  "version": "1.0.0",
+  "description": "UYIRA Smart Health Monitoring Application - Monorepo Workspace",
+  "private": true,
+  "scripts": {
+    "mobile": "npm --prefix mobile start",
+    "mobile:android": "npm --prefix mobile run android",
+    "mobile:ios": "npm --prefix mobile run ios",
+    "mobile:web": "npm --prefix mobile run web",
+    "mobile:check": "npm --prefix mobile run ts:check",
+    "server": "npm --prefix server run dev",
+    "server:build": "npm --prefix server run build",
+    "server:start": "npm --prefix server start",
+    "server:check": "npm --prefix server run build",
+    "test:auth": "npm --prefix server run test:auth"
+  }
+}
+

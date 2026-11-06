@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "UYIRA",
+    "slug": "uyira",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "uyira",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#12372A"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.uyira.health"
+    },
+    "android": {
+      "package": "com.uyira.health",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#12372A"
+      },
+      "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "SCHEDULE_EXACT_ALARM",
+        "POST_NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "android.permission.ACTIVITY_RECOGNITION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_HEALTH",
+        "android.permission.BODY_SENSORS",
+        "android.permission.WAKE_LOCK",
+        "android.permission.health.READ_STEPS",
+        "android.permission.health.WRITE_STEPS"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/images/icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#12372A",
+          "sounds": [
+            "./assets/audio/alaram.wav"
+          ]
+        }
+      ]
+    ]
+  }
+}
+
