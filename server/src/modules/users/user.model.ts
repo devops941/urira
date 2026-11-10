@@ -34,7 +34,6 @@ const UserSchema = new Schema<IUserDocument>(
       unique: true,
       sparse: true,
       trim: true,
-      index: true,
     },
     dateOfBirth: {
       type: Date,

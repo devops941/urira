@@ -20,6 +20,8 @@ export interface IFoodLogDocument extends Document {
   calculatedNutrition: INutrients;
   consumedAt: Date;
   dateString: string; // YYYY-MM-DD for fast date indexing
+  isManualEntry?: boolean;
+  manualFoodName?: string;
   notes?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -49,6 +51,8 @@ const FoodLogSchema = new Schema<IFoodLogDocument>(
     },
     consumedAt: { type: Date, required: true, default: Date.now, index: true },
     dateString: { type: String, required: true, index: true },
+    isManualEntry: { type: Boolean, default: false },
+    manualFoodName: { type: String, trim: true },
     notes: { type: String, maxlength: 300 },
   },
   {

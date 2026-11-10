@@ -9,6 +9,7 @@ const controller = new FoodLogController();
 router.use(requireAuth);
 
 router.post('/', controller.addFoodLog);
+router.post('/manual', controller.addManualFoodLog);
 router.get('/today', controller.getTodayLogs);
 router.get('/history', controller.getHistory);
 router.get('/range', controller.getRangeSummary);

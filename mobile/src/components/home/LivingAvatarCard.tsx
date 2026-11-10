@@ -71,12 +71,11 @@ export const LivingAvatarCard: React.FC<LivingAvatarCardProps> = ({
     vitality?.dimensionScores?.nutrition?.percentage ??
     Math.round(Math.min(1.0, nutConsumed / Math.max(nutTarget, 1)) * 100);
 
-  const sleepHours = sleepRecord?.durationMinutes
-    ? sleepRecord.durationMinutes / 60
-    : 7.8;
+  const hasSleep = !!(sleepRecord?.durationMinutes && sleepRecord.durationMinutes > 0);
+  const sleepHours = hasSleep ? sleepRecord!.durationMinutes / 60 : 0;
   const sleepPct =
     vitality?.dimensionScores?.sleep?.percentage ??
-    Math.round(Math.min(1.0, sleepHours / 8.0) * 100);
+    (hasSleep ? Math.round(Math.min(1.0, sleepHours / 8.0) * 100) : 0);
 
   // Composite Score across 4 Core Pillars (Steps, Water, Nutrition, Sleep)
   const score =

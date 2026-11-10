@@ -77,19 +77,26 @@ export class AuthService {
     const passwordHash = await hashPassword(dto.password);
 
     // 3. Create pending user
-    const newUser = await this.authRepo.createUser({
+    const userPayload: any = {
       fullName: dto.fullName.trim(),
       email: dto.email.trim(),
       normalizedEmail,
-      mobileNumber: dto.mobileNumber?.trim() || undefined,
-      normalizedMobileNumber: normalizedMobile || undefined,
       dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : undefined,
       gender: dto.gender || 'prefer_not_to_say',
       passwordHash,
       isVerified: false,
       verificationChannel: 'EMAIL',
       accountStatus: 'PENDING_VERIFICATION',
-    });
+    };
+
+    if (dto.mobileNumber && dto.mobileNumber.trim()) {
+      userPayload.mobileNumber = dto.mobileNumber.trim();
+    }
+    if (normalizedMobile) {
+      userPayload.normalizedMobileNumber = normalizedMobile;
+    }
+
+    const newUser = await this.authRepo.createUser(userPayload);
 
     // 4. Issue OTP
     const { nextResendAllowedIn } = await this.verificationSvc.issueOtp(

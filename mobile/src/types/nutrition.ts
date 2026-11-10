@@ -15,6 +15,8 @@ export enum FoodCategory {
   LUNCH = 'LUNCH',
   DINNER = 'DINNER',
   TRADITIONAL_INDIAN = 'TRADITIONAL_INDIAN',
+  CUSTOM = 'CUSTOM',
+  OTHER = 'OTHER',
 }
 
 export enum MealType {
@@ -60,6 +62,8 @@ export interface IFood {
   preparationMethod?: string;
   source: string;
   isVerified: boolean;
+  isCustom?: boolean;
+  createdBy?: string;
   favoritedBy?: string[];
 }
 
@@ -74,7 +78,24 @@ export interface IFoodLog {
   calculatedNutrition: INutrients;
   consumedAt: string;
   dateString: string;
+  isManualEntry?: boolean;
+  manualFoodName?: string;
   notes?: string;
+}
+
+export interface IManualFoodLogInput {
+  foodName: string;
+  mealType: MealType;
+  quantity?: number;
+  unit?: string;
+  weightGrams?: number;
+  calories: number;
+  protein?: number;
+  carbohydrates?: number;
+  fat?: number;
+  fiber?: number;
+  notes?: string;
+  saveToCustomFoods?: boolean;
 }
 
 export interface IMealBreakdown {

@@ -199,8 +199,10 @@ export default function HomeScreen() {
   const currentWater = (waterSummary as any)?.totalConsumedMl || waterSummary?.totalAmountMl || 0;
   const waterRatio = Math.min(1.0, currentWater / Math.max(waterTarget, 1));
 
-  const currentSleep = sleepRecord?.durationMinutes ? sleepRecord.durationMinutes / 60 : 7.8;
-  const sleepRatio = Math.min(1.0, currentSleep / 8.0);
+  const hasSleep = !!(sleepRecord?.durationMinutes && sleepRecord.durationMinutes > 0);
+  const currentSleep = hasSleep ? sleepRecord!.durationMinutes / 60 : 0;
+  const sleepTarget = profile?.preferredSleepGoalHours || 8;
+  const sleepRatio = hasSleep ? Math.min(1.0, currentSleep / Math.max(sleepTarget, 1)) : 0;
 
   return (
     <View style={styles.safeArea}>
@@ -370,7 +372,7 @@ export default function HomeScreen() {
               <Text style={styles.metricCardValue}>
                 {stepsSummary?.totalSteps !== undefined
                   ? stepsSummary.totalSteps.toLocaleString()
-                  : '4,250'}
+                  : '0'}
                 <Text style={styles.metricCardTarget}> / {stepTarget >= 1000 ? `${(stepTarget / 1000).toFixed(0)}k` : stepTarget}</Text>
               </Text>
               <View style={styles.metricProgressBarTrack}>
@@ -389,7 +391,7 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.metricCardLabel}>Nutrition</Text>
               <Text style={styles.metricCardValue}>
-                {nutritionSummary ? `${nutritionSummary.consumedCalories}` : '496'}
+                {nutritionSummary ? `${nutritionSummary.consumedCalories}` : '0'}
                 <Text style={styles.metricCardTarget}> / {calTarget} kcal</Text>
               </Text>
               <View style={styles.metricProgressBarTrack}>
@@ -428,8 +430,8 @@ export default function HomeScreen() {
                 <Moon size={15} color="#8B5CF6" />
               </View>
               <Text style={styles.metricCardLabel}>Sleep</Text>
-              <Text style={styles.metricCardValue}>{currentSleep.toFixed(1)} h</Text>
-              <Text style={styles.metricSubtitleBadge}>Target: 8 h</Text>
+              <Text style={styles.metricCardValue}>{hasSleep ? `${currentSleep.toFixed(1)} h` : '0.0 h'}</Text>
+              <Text style={styles.metricSubtitleBadge}>{hasSleep ? `Target: ${sleepTarget} h` : 'No log yet'}</Text>
               <View style={styles.metricProgressBarTrack}>
                 <View style={[styles.metricProgressBarFill, { width: `${Math.round(sleepRatio * 100)}%`, backgroundColor: '#8B5CF6' }]} />
               </View>
@@ -446,10 +448,10 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.metricCardLabel}>BMI</Text>
               <Text style={styles.metricCardValue}>
-                {latestBmi ? `${Number(latestBmi.bmiValue).toFixed(2)}` : '24.46'}
+                {latestBmi ? `${Number(latestBmi.bmiValue).toFixed(2)}` : '--'}
               </Text>
               <Text style={[styles.metricSubtitleBadge, { color: '#16A34A' }]}>
-                {latestBmi?.category || 'Healthy Weight'}
+                {latestBmi?.category || 'Calculate'}
               </Text>
             </TouchableOpacity>
 
@@ -464,7 +466,7 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.metricCardLabel}>Calorie Burn</Text>
               <Text style={styles.metricCardValue}>
-                {stepsSummary?.totalCalories ? `${stepsSummary.totalCalories}` : '185'}
+                {stepsSummary?.totalCalories !== undefined ? `${stepsSummary.totalCalories}` : '0'}
                 <Text style={styles.metricCardTarget}> kcal</Text>
               </Text>
               <Text style={[styles.metricSubtitleBadge, { color: '#EA580C' }]}>

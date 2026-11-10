@@ -9,7 +9,7 @@ export class FoodService {
     this.foodRepo = new FoodRepository();
   }
 
-  async getFoods(options: SearchFoodsInput) {
+  async getFoods(options: SearchFoodsInput, userId?: string) {
     const { foods, total } = await this.foodRepo.searchFoods({
       query: options.q,
       category: options.category,
@@ -17,6 +17,7 @@ export class FoodService {
       minCalories: options.minCalories,
       maxCalories: options.maxCalories,
       minProtein: options.minProtein,
+      userId,
       page: options.page,
       limit: options.limit,
     });

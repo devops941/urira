@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { FoodLogService } from './food-log.service.js';
 import {
   CreateFoodLogSchema,
+  CreateManualFoodLogSchema,
   UpdateFoodLogSchema,
   QueryFoodLogHistorySchema,
 } from './food-log.validation.js';
@@ -22,6 +23,22 @@ export class FoodLogController {
       res.status(201).json({
         success: true,
         message: 'Food logged successfully',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  addManualFoodLog = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?._id;
+      const validated = CreateManualFoodLogSchema.parse(req.body);
+      const result = await this.foodLogService.addManualFoodLog(userId, validated);
+
+      res.status(201).json({
+        success: true,
+        message: 'Custom food logged successfully',
         data: result,
       });
     } catch (error) {

@@ -23,3 +23,17 @@ export const requireAuth = (req: Request, res: Response, next: NextFunction): vo
   }
 };
 
+export const optionalAuth = (req: Request, _res: Response, next: NextFunction): void => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    try {
+      const payload = verifyAccessToken(token);
+      req.user = payload as any;
+    } catch {
+      // Ignored for optional auth
+    }
+  }
+  next();
+};
+

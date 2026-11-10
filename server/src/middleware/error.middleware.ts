@@ -31,11 +31,15 @@ export const errorHandler = (
   // Handle MongoDB duplicate key error (code 11000)
   if (err.code === 11000) {
     const field = Object.keys(err.keyValue || {})[0] || 'field';
-    const message = field.toLowerCase().includes('email')
-      ? 'An account with this email address already exists'
-      : field.toLowerCase().includes('mobile')
-      ? 'An account with this mobile number already exists'
-      : `Duplicate value entered for ${field}`;
+    const value = err.keyValue ? err.keyValue[field] : undefined;
+    let message = `Duplicate value entered for ${field}`;
+    if (field.toLowerCase().includes('email')) {
+      message = 'An account with this email address already exists';
+    } else if (field.toLowerCase().includes('mobile')) {
+      message = (value === null || value === undefined || value === '')
+        ? 'An account with these details already exists'
+        : 'An account with this mobile number already exists';
+    }
     sendError(res, message, 409);
     return;
   }

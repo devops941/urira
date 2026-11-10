@@ -12,27 +12,54 @@ export class FoodRepository {
 
   async searchFoods(options: {
     query?: string;
-    category?: FoodCategory;
+    category?: FoodCategory | string;
     dietaryTag?: DietaryTag;
     maxCalories?: number;
     minCalories?: number;
     minProtein?: number;
+    userId?: string;
     page: number;
     limit: number;
   }): Promise<{ foods: IFoodDocument[]; total: number }> {
     const filter: Record<string, any> = { isActive: true };
 
-    if (options.query && options.query.trim()) {
-      const q = options.query.trim().toLowerCase();
-      filter.$or = [
-        { normalizedName: { $regex: q, $options: 'i' } },
-        { name: { $regex: q, $options: 'i' } },
-        { ingredients: { $regex: q, $options: 'i' } },
+    if (options.userId) {
+      filter.$and = [
+        {
+          $or: [
+            { isVerified: true },
+            { createdBy: new Types.ObjectId(options.userId) },
+          ],
+        },
       ];
     }
 
-    if (options.category) {
-      filter.category = options.category;
+    if (options.query && options.query.trim()) {
+      const q = options.query.trim().toLowerCase();
+      const queryMatch = {
+        $or: [
+          { normalizedName: { $regex: q, $options: 'i' } },
+          { name: { $regex: q, $options: 'i' } },
+          { ingredients: { $regex: q, $options: 'i' } },
+        ],
+      };
+      if (filter.$and) {
+        filter.$and.push(queryMatch);
+      } else {
+        filter.$or = queryMatch.$or;
+      }
+    }
+
+    if (options.category && options.category !== 'ALL') {
+      if (options.category === 'CUSTOM' || options.category === 'MY_FOODS') {
+        if (options.userId) {
+          filter.createdBy = new Types.ObjectId(options.userId);
+        } else {
+          filter.isCustom = true;
+        }
+      } else {
+        filter.category = options.category;
+      }
     }
 
     if (options.dietaryTag) {
@@ -57,7 +84,7 @@ export class FoodRepository {
 
     const [foods, total] = await Promise.all([
       Food.find(filter)
-        .sort({ isVerified: -1, name: 1 })
+        .sort({ isCustom: -1, isVerified: -1, name: 1 })
         .skip(skip)
         .limit(options.limit)
         .exec(),

@@ -10,6 +10,7 @@ import {
   Modal,
   Platform,
   Alert,
+  Switch,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import {
@@ -20,6 +21,7 @@ import {
   Check,
   Utensils,
   ChevronDown,
+  ChevronUp,
   Sparkles,
 } from 'lucide-react-native';
 import { AppHeader } from '../../../components/common/AppHeader';
@@ -57,6 +59,23 @@ export default function LogFoodScreen() {
   const [selectedUnit, setSelectedUnit] = useState('piece');
   const [submitting, setSubmitting] = useState(false);
 
+  // Manual Food Entry Modal State
+  const [manualModalVisible, setManualModalVisible] = useState(false);
+  const [manualFoodName, setManualFoodName] = useState('');
+  const [manualMealType, setManualMealType] = useState<MealType>(selectedMeal);
+  const [manualQuantity, setManualQuantity] = useState('1');
+  const [manualUnit, setManualUnit] = useState('serving');
+  const [manualWeightGrams, setManualWeightGrams] = useState('150');
+  const [manualCalories, setManualCalories] = useState('');
+  const [manualProtein, setManualProtein] = useState('');
+  const [manualCarbs, setManualCarbs] = useState('');
+  const [manualFat, setManualFat] = useState('');
+  const [manualFiber, setManualFiber] = useState('');
+  const [manualNotes, setManualNotes] = useState('');
+  const [manualSaveCustom, setManualSaveCustom] = useState(true);
+  const [manualSubmitting, setManualSubmitting] = useState(false);
+  const [showMacroFields, setShowMacroFields] = useState(false);
+
   // Load Categories & Initial Foods
   useEffect(() => {
     async function init() {
@@ -76,11 +95,12 @@ export default function LogFoodScreen() {
     init();
   }, []);
 
-  // Filter foods by search query and category
+  // Filter foods by search query and category (including custom foods)
   const filteredFoods = useMemo(() => {
     return foods.filter((food) => {
       const matchCat =
-        selectedCategory === 'ALL' || food.category === selectedCategory;
+        selectedCategory === 'ALL' ||
+        (selectedCategory === 'CUSTOM' ? !!food.isCustom : food.category === selectedCategory);
       const matchQuery =
         !searchQuery.trim() ||
         food.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -94,6 +114,111 @@ export default function LogFoodScreen() {
     setQuantity(String(food.defaultServingSize || 1));
     setSelectedUnit(food.defaultServingUnit || 'serving');
     setModalVisible(true);
+  };
+
+  const handleOpenManualModal = (prefillName = '') => {
+    setManualFoodName(prefillName || searchQuery);
+    setManualMealType(selectedMeal);
+    setManualQuantity('1');
+    setManualUnit('serving');
+    setManualWeightGrams('150');
+    setManualCalories('');
+    setManualProtein('');
+    setManualCarbs('');
+    setManualFat('');
+    setManualFiber('');
+    setManualNotes('');
+    setManualSaveCustom(true);
+    setShowMacroFields(false);
+    setManualModalVisible(true);
+  };
+
+  // Live Macro Distribution for Manual Entry Visualizer
+  const manualMacroRatios = useMemo(() => {
+    const p = parseFloat(manualProtein) || 0;
+    const c = parseFloat(manualCarbs) || 0;
+    const f = parseFloat(manualFat) || 0;
+    const totalGrams = p + c + f;
+    if (totalGrams <= 0) return { pPct: 0, cPct: 0, fPct: 0 };
+    return {
+      pPct: Math.round((p / totalGrams) * 100),
+      cPct: Math.round((c / totalGrams) * 100),
+      fPct: Math.round((f / totalGrams) * 100),
+    };
+  }, [manualProtein, manualCarbs, manualFat]);
+
+  const handleConfirmManualLog = async () => {
+    if (!manualFoodName.trim()) {
+      const msg = 'Please enter a food name';
+      if (Platform.OS === 'web') window.alert(msg);
+      else Alert.alert('Missing Name', msg);
+      return;
+    }
+
+    const cals = parseFloat(manualCalories);
+    if (isNaN(cals) || cals < 0) {
+      const msg = 'Please enter a valid calorie amount (e.g. 250)';
+      if (Platform.OS === 'web') window.alert(msg);
+      else Alert.alert('Invalid Calories', msg);
+      return;
+    }
+
+    const qty = parseFloat(manualQuantity) || 1;
+    const wt = parseFloat(manualWeightGrams) || 150;
+    const protein = parseFloat(manualProtein) || 0;
+    const carbs = parseFloat(manualCarbs) || 0;
+    const fat = parseFloat(manualFat) || 0;
+    const fiber = parseFloat(manualFiber) || 0;
+
+    setManualSubmitting(true);
+    try {
+      await foodLogService.logManualFood({
+        foodName: manualFoodName.trim(),
+        mealType: manualMealType,
+        quantity: qty,
+        unit: manualUnit,
+        weightGrams: wt,
+        calories: cals,
+        protein,
+        carbohydrates: carbs,
+        fat,
+        fiber,
+        notes: manualNotes.trim() || undefined,
+        saveToCustomFoods: manualSaveCustom,
+      });
+
+      setManualModalVisible(false);
+
+      // Refresh list to include newly created custom food
+      const searchRes = await foodService.searchFoods({ limit: 40 });
+      setFoods(searchRes.foods);
+
+      if (Platform.OS === 'web') {
+        window.alert(`Logged "${manualFoodName.trim()}" (${cals} kcal) to ${manualMealType}!`);
+        router.replace('/(protected)/nutrition');
+      } else {
+        Alert.alert(
+          'Food Logged Successfully',
+          `Added "${manualFoodName.trim()}" (${cals} kcal) to ${manualMealType}`,
+          [
+            {
+              text: 'View Dashboard',
+              onPress: () => router.replace('/(protected)/nutrition'),
+            },
+            {
+              text: 'Add More',
+              style: 'cancel',
+            },
+          ]
+        );
+      }
+    } catch (err: any) {
+      const msg = err.response?.data?.message || err.message || 'Failed to log food';
+      if (Platform.OS === 'web') window.alert(msg);
+      else Alert.alert('Error', msg);
+    } finally {
+      setManualSubmitting(false);
+    }
   };
 
   // Compute live estimate preview in modal
@@ -224,6 +349,27 @@ export default function LogFoodScreen() {
           ) : null}
         </View>
 
+        {/* Quick Manual Entry Banner */}
+        <TouchableOpacity
+          style={styles.manualEntryBanner}
+          onPress={() => handleOpenManualModal(searchQuery)}
+          activeOpacity={0.8}
+        >
+          <View style={styles.manualBannerLeft}>
+            <View style={styles.manualBannerIcon}>
+              <Sparkles size={16} color="#12372A" />
+            </View>
+            <View style={styles.manualBannerTextBox}>
+              <Text style={styles.manualBannerTitle}>Can't find your food?</Text>
+              <Text style={styles.manualBannerSub}>Enter custom dish, portions & calories manually</Text>
+            </View>
+          </View>
+          <View style={styles.manualBannerButton}>
+            <Plus size={14} color="#FFFFFF" />
+            <Text style={styles.manualBannerBtnText}>Add</Text>
+          </View>
+        </TouchableOpacity>
+
         {/* Category Filter Chips */}
         <ScrollView
           horizontal
@@ -246,6 +392,24 @@ export default function LogFoodScreen() {
               ]}
             >
               All Foods
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.categoryChip,
+              selectedCategory === 'CUSTOM' && styles.categoryChipActive,
+            ]}
+            onPress={() => setSelectedCategory('CUSTOM')}
+            activeOpacity={0.8}
+          >
+            <Text
+              style={[
+                styles.categoryChipText,
+                selectedCategory === 'CUSTOM' && styles.categoryChipTextActive,
+              ]}
+            >
+              ⭐ My Foods
             </Text>
           </TouchableOpacity>
 
@@ -287,8 +451,24 @@ export default function LogFoodScreen() {
         ) : filteredFoods.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Utensils size={40} color={colors.textSecondary} />
-            <Text style={styles.emptyTitle}>No matching food items found</Text>
-            <Text style={styles.emptySubtitle}>Try searching for Idli, Dosa, Rice, Sambar, Chapati, Dal, or Egg</Text>
+            <Text style={styles.emptyTitle}>
+              {searchQuery ? `"${searchQuery}" not found` : 'No matching food items found'}
+            </Text>
+            <Text style={styles.emptySubtitle}>
+              {searchQuery
+                ? `Don't see "${searchQuery}" in our database? Add it manually in 1 tap!`
+                : 'Try searching for Idli, Dosa, Rice, Sambar, Chapati, Dal, or add custom food.'}
+            </Text>
+            <TouchableOpacity
+              style={styles.emptyAddButton}
+              onPress={() => handleOpenManualModal(searchQuery)}
+              activeOpacity={0.8}
+            >
+              <Plus size={16} color="#FFFFFF" />
+              <Text style={styles.emptyAddButtonText}>
+                {searchQuery ? `+ Add "${searchQuery}" Manually` : '+ Enter Food Manually'}
+              </Text>
+            </TouchableOpacity>
           </View>
         ) : (
           <ScrollView
@@ -304,6 +484,12 @@ export default function LogFoodScreen() {
                 activeOpacity={0.7}
               >
                 <View style={styles.foodCardLeft}>
+                  {food.isCustom ? (
+                    <View style={styles.customFoodBadge}>
+                      <Sparkles size={10} color="#15803D" />
+                      <Text style={styles.customFoodBadgeText}>My Custom Food</Text>
+                    </View>
+                  ) : null}
                   <Text style={styles.foodCardName}>{food.name}</Text>
                   <Text style={styles.foodCardMeta}>
                     Serving: {food.defaultServingSize} {food.defaultServingUnit} ({food.weightPerDefaultServingGrams}g) • {food.source.split(' ')[0]}
@@ -450,6 +636,254 @@ export default function LogFoodScreen() {
                 <Text style={styles.confirmLogButtonText}>Add to {selectedMeal}</Text>
               )}
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Manual Food Entry Modal */}
+      <Modal
+        visible={manualModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setManualModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { maxHeight: '90%' }]}>
+            <View style={styles.modalHeader}>
+              <View style={styles.modalTitleBox}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Sparkles size={18} color="#15803D" />
+                  <Text style={styles.modalTitle}>Enter Food Manually</Text>
+                </View>
+                <Text style={styles.modalSubtitle}>
+                  Add custom homemade recipe, meal or snack
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setManualModalVisible(false)}
+                style={styles.modalCloseButton}
+              >
+                <X size={20} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+              {/* Meal Type Selector */}
+              <View style={styles.manualFieldGroup}>
+                <Text style={styles.inputLabel}>Meal Time</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                  {MEALS.map((m) => (
+                    <TouchableOpacity
+                      key={m.value}
+                      style={[
+                        styles.manualMealChip,
+                        manualMealType === m.value && styles.manualMealChipActive,
+                      ]}
+                      onPress={() => setManualMealType(m.value)}
+                    >
+                      <Text
+                        style={[
+                          styles.manualMealChipText,
+                          manualMealType === m.value && styles.manualMealChipTextActive,
+                        ]}
+                      >
+                        {m.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+
+              {/* Food Name */}
+              <View style={styles.manualFieldGroup}>
+                <Text style={styles.inputLabel}>Food Name *</Text>
+                <TextInput
+                  style={styles.manualTextInput}
+                  placeholder="e.g., Homemade Dosa, Kambu Koozh, Sambar Rice"
+                  placeholderTextColor={colors.textSecondary}
+                  value={manualFoodName}
+                  onChangeText={setManualFoodName}
+                />
+              </View>
+
+              {/* Portion & Serving */}
+              <View style={styles.manualFieldGroup}>
+                <Text style={styles.inputLabel}>Portion / Serving</Text>
+                <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+                  <TextInput
+                    style={[styles.quantityInput, { width: 70 }]}
+                    keyboardType="numeric"
+                    placeholder="1"
+                    value={manualQuantity}
+                    onChangeText={setManualQuantity}
+                  />
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                    {['serving', 'plate', 'bowl', 'cup', 'piece', 'g', 'ml'].map((u) => (
+                      <TouchableOpacity
+                        key={u}
+                        style={[styles.unitPill, manualUnit === u && styles.unitPillActive]}
+                        onPress={() => setManualUnit(u)}
+                      >
+                        <Text style={[styles.unitPillText, manualUnit === u && styles.unitPillTextActive]}>
+                          {u}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              </View>
+
+              {/* Calories & Weight */}
+              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 14 }}>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 6 }}>
+                    <Flame size={14} color="#EA580C" />
+                    <Text style={styles.inputLabel}>Calories (kcal) *</Text>
+                  </View>
+                  <TextInput
+                    style={[styles.manualTextInput, { borderColor: '#FDBA74', backgroundColor: '#FFF7ED' }]}
+                    keyboardType="numeric"
+                    placeholder="e.g. 250"
+                    placeholderTextColor="#9A3412"
+                    value={manualCalories}
+                    onChangeText={setManualCalories}
+                  />
+                </View>
+
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inputLabel, { marginBottom: 6 }]}>Weight (grams approx)</Text>
+                  <TextInput
+                    style={styles.manualTextInput}
+                    keyboardType="numeric"
+                    placeholder="150"
+                    placeholderTextColor={colors.textSecondary}
+                    value={manualWeightGrams}
+                    onChangeText={setManualWeightGrams}
+                  />
+                </View>
+              </View>
+
+              {/* Expandable Macronutrients Section */}
+              <TouchableOpacity
+                style={styles.macroToggleRow}
+                onPress={() => setShowMacroFields(!showMacroFields)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.macroToggleText}>
+                  {showMacroFields ? 'Hide Macronutrients' : '+ Add Macronutrients (Protein, Carbs, Fat)'}
+                </Text>
+                {showMacroFields ? (
+                  <ChevronUp size={16} color={colors.primary} />
+                ) : (
+                  <ChevronDown size={16} color={colors.primary} />
+                )}
+              </TouchableOpacity>
+
+              {showMacroFields && (
+                <View style={styles.macroInputsCard}>
+                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.macroInputLabel}>Protein (g)</Text>
+                      <TextInput
+                        style={styles.macroTextInput}
+                        keyboardType="numeric"
+                        placeholder="0"
+                        value={manualProtein}
+                        onChangeText={setManualProtein}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.macroInputLabel}>Carbs (g)</Text>
+                      <TextInput
+                        style={styles.macroTextInput}
+                        keyboardType="numeric"
+                        placeholder="0"
+                        value={manualCarbs}
+                        onChangeText={setManualCarbs}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.macroInputLabel}>Fat (g)</Text>
+                      <TextInput
+                        style={styles.macroTextInput}
+                        keyboardType="numeric"
+                        placeholder="0"
+                        value={manualFat}
+                        onChangeText={setManualFat}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.macroInputLabel}>Fiber (g)</Text>
+                      <TextInput
+                        style={styles.macroTextInput}
+                        keyboardType="numeric"
+                        placeholder="0"
+                        value={manualFiber}
+                        onChangeText={setManualFiber}
+                      />
+                    </View>
+                  </View>
+
+                  {/* Visual Macro Bar */}
+                  {(parseFloat(manualProtein) > 0 || parseFloat(manualCarbs) > 0 || parseFloat(manualFat) > 0) && (
+                    <View style={{ marginTop: 12 }}>
+                      <Text style={{ fontSize: 11, color: colors.textSecondary, marginBottom: 4 }}>
+                        Macro Ratio: {manualMacroRatios.pPct}% Protein • {manualMacroRatios.cPct}% Carbs • {manualMacroRatios.fPct}% Fat
+                      </Text>
+                      <View style={styles.macroBarTrack}>
+                        <View style={{ flex: manualMacroRatios.pPct || 1, backgroundColor: '#2563EB' }} />
+                        <View style={{ flex: manualMacroRatios.cPct || 1, backgroundColor: '#F97316' }} />
+                        <View style={{ flex: manualMacroRatios.fPct || 1, backgroundColor: '#EAB308' }} />
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Notes Input */}
+              <View style={[styles.manualFieldGroup, { marginTop: 10 }]}>
+                <Text style={styles.inputLabel}>Notes / Preparation (Optional)</Text>
+                <TextInput
+                  style={[styles.manualTextInput, { height: 38 }]}
+                  placeholder="e.g., Cooked with low oil, less salt"
+                  placeholderTextColor={colors.textSecondary}
+                  value={manualNotes}
+                  onChangeText={setManualNotes}
+                />
+              </View>
+
+              {/* Save to Custom Foods Library Switch */}
+              <View style={styles.saveCustomRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.saveCustomTitle}>Save to My Custom Foods</Text>
+                  <Text style={styles.saveCustomSub}>
+                    Easily search and re-log this dish next time
+                  </Text>
+                </View>
+                <Switch
+                  value={manualSaveCustom}
+                  onValueChange={setManualSaveCustom}
+                  trackColor={{ false: '#E2E8F0', true: '#86EFAC' }}
+                  thumbColor={manualSaveCustom ? colors.primary : '#94A3B8'}
+                />
+              </View>
+
+              {/* Submit Button */}
+              <TouchableOpacity
+                style={[styles.confirmLogButton, manualSubmitting && styles.buttonDisabled, { marginTop: 14 }]}
+                onPress={handleConfirmManualLog}
+                disabled={manualSubmitting}
+                activeOpacity={0.8}
+              >
+                {manualSubmitting ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.confirmLogButtonText}>
+                    Log {manualFoodName ? `"${manualFoodName}"` : 'Food'} Now
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -768,6 +1202,198 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     fontFamily: 'PlusJakartaSans_700Bold',
+  },
+  // Manual Entry Quick Banner
+  manualEntryBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  manualBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+    marginRight: 10,
+  },
+  manualBannerIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: '#D1FAE5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manualBannerTextBox: {
+    flex: 1,
+  },
+  manualBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#065F46',
+    fontFamily: 'PlusJakartaSans_700Bold',
+  },
+  manualBannerSub: {
+    fontSize: 11,
+    color: '#047857',
+    marginTop: 1,
+  },
+  manualBannerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#12372A',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  manualBannerBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  // Custom Food Badge
+  customFoodBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+    marginBottom: 3,
+  },
+  customFoodBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#15803D',
+  },
+  // Empty State Button
+  emptyAddButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 14,
+    marginTop: 16,
+  },
+  emptyAddButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    fontFamily: 'PlusJakartaSans_700Bold',
+  },
+  // Manual Form Fields
+  manualFieldGroup: {
+    marginBottom: 14,
+  },
+  manualTextInput: {
+    height: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 14,
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
+  manualMealChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  manualMealChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  manualMealChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  manualMealChipTextActive: {
+    color: '#FFFFFF',
+  },
+  macroToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  macroToggleText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  macroInputsCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 12,
+    marginBottom: 12,
+  },
+  macroInputLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    marginBottom: 4,
+  },
+  macroTextInput: {
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+    textAlign: 'center',
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  macroBarTrack: {
+    height: 6,
+    borderRadius: 3,
+    overflow: 'hidden',
+    flexDirection: 'row',
+    backgroundColor: '#E2E8F0',
+  },
+  saveCustomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 12,
+    marginTop: 8,
+  },
+  saveCustomTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  saveCustomSub: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    marginTop: 2,
   },
 });
 

@@ -4,6 +4,7 @@ import {
   INutritionSummary,
   IFoodLogRangeSummary,
   MealType,
+  IManualFoodLogInput,
 } from '../../types/nutrition';
 
 export const foodLogService = {
@@ -15,6 +16,11 @@ export const foodLogService = {
     notes?: string;
   }): Promise<{ log: IFoodLog; dailySummary: INutritionSummary }> {
     const res = await apiClient.post('/food-logs', input);
+    return res.data.data;
+  },
+
+  async logManualFood(input: IManualFoodLogInput): Promise<{ log: IFoodLog; dailySummary: INutritionSummary }> {
+    const res = await apiClient.post('/food-logs/manual', input);
     return res.data.data;
   },
 

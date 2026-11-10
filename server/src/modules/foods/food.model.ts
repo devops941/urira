@@ -17,6 +17,8 @@ export enum FoodCategory {
   LUNCH = 'LUNCH',
   DINNER = 'DINNER',
   TRADITIONAL_INDIAN = 'TRADITIONAL_INDIAN',
+  CUSTOM = 'CUSTOM',
+  OTHER = 'OTHER',
 }
 
 export enum DietaryTag {
@@ -65,6 +67,8 @@ export interface IFoodDocument extends Document {
   externalFoodId?: string;
   isVerified: boolean;
   isActive: boolean;
+  isCustom?: boolean;
+  createdBy?: Types.ObjectId;
   favoritedBy: Types.ObjectId[];
   createdAt: Date;
   updatedAt: Date;
@@ -117,6 +121,8 @@ const FoodSchema = new Schema<IFoodDocument>(
     externalFoodId: { type: String },
     isVerified: { type: Boolean, default: true, index: true },
     isActive: { type: Boolean, default: true, index: true },
+    isCustom: { type: Boolean, default: false, index: true },
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     favoritedBy: [{ type: Schema.Types.ObjectId, ref: 'User', index: true }],
   },
   {

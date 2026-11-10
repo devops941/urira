@@ -11,8 +11,9 @@ export class FoodController {
 
   getFoods = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?._id;
       const validated = SearchFoodsSchema.parse(req.query);
-      const result = await this.foodService.getFoods(validated);
+      const result = await this.foodService.getFoods(validated, userId);
 
       res.status(200).json({
         success: true,
@@ -26,8 +27,9 @@ export class FoodController {
 
   searchFoods = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?._id;
       const validated = SearchFoodsSchema.parse(req.query);
-      const result = await this.foodService.getFoods(validated);
+      const result = await this.foodService.getFoods(validated, userId);
 
       res.status(200).json({
         success: true,

@@ -1,7 +1,9 @@
+import { Types } from 'mongoose';
 import { FoodLogRepository } from './food-log.repository.js';
 import { NutritionCalculatorService } from '../nutrition/nutrition-calculator.service.js';
-import { CreateFoodLogInput, UpdateFoodLogInput } from './food-log.validation.js';
+import { CreateFoodLogInput, CreateManualFoodLogInput, UpdateFoodLogInput } from './food-log.validation.js';
 import { MealType, IFoodLogDocument } from './food-log.model.js';
+import { Food, FoodCategory } from '../foods/food.model.js';
 
 export class FoodLogService {
   private foodLogRepo: FoodLogRepository;
@@ -42,6 +44,87 @@ export class FoodLogService {
     });
 
     // Update daily summary in background
+    const dailySummary = await this.calcService.recalculateDailySummary(
+      userId,
+      dateString
+    );
+
+    return { log, dailySummary };
+  }
+
+  async addManualFoodLog(userId: string, input: CreateManualFoodLogInput) {
+    const consumedAt = input.consumedAt ? new Date(input.consumedAt) : new Date();
+    const dateString = this.getDateString(consumedAt);
+
+    const trimmedName = input.foodName.trim();
+    const normalizedName = trimmedName.toLowerCase();
+    const quantity = input.quantity > 0 ? input.quantity : 1;
+    const unit = input.unit || 'serving';
+    const weightGrams = input.weightGrams && input.weightGrams > 0
+      ? input.weightGrams
+      : Math.max(100 * quantity, 50);
+
+    // Compute standardized nutrientsPer100g
+    const factor = 100 / Math.max(weightGrams, 1);
+    const nutrientsPer100g = {
+      calories: Math.round(input.calories * factor),
+      protein: Math.round((input.protein || 0) * factor * 10) / 10,
+      carbohydrates: Math.round((input.carbohydrates || 0) * factor * 10) / 10,
+      fat: Math.round((input.fat || 0) * factor * 10) / 10,
+      fiber: Math.round((input.fiber || 0) * factor * 10) / 10,
+      sugar: 0,
+      sodium: 0,
+    };
+
+    // Check if user already created a custom food with this name
+    let customFood = await Food.findOne({
+      createdBy: new Types.ObjectId(userId),
+      normalizedName,
+    });
+
+    if (!customFood) {
+      customFood = await Food.create({
+        name: trimmedName,
+        normalizedName,
+        category: FoodCategory.CUSTOM,
+        description: 'User-created custom food',
+        defaultServingSize: quantity,
+        defaultServingUnit: unit,
+        weightPerDefaultServingGrams: weightGrams,
+        nutrientsPer100g,
+        source: 'User Custom',
+        isVerified: false,
+        isActive: true,
+        isCustom: true,
+        createdBy: new Types.ObjectId(userId),
+      });
+    }
+
+    const calculatedNutrition = {
+      calories: Math.round(input.calories),
+      protein: Math.round((input.protein || 0) * 10) / 10,
+      carbohydrates: Math.round((input.carbohydrates || 0) * 10) / 10,
+      fat: Math.round((input.fat || 0) * 10) / 10,
+      fiber: Math.round((input.fiber || 0) * 10) / 10,
+      sugar: 0,
+      sodium: 0,
+    };
+
+    const log = await this.foodLogRepo.create({
+      userId: userId as any,
+      foodId: customFood._id as any,
+      mealType: input.mealType,
+      quantity,
+      unit,
+      weightGrams,
+      calculatedNutrition,
+      consumedAt,
+      dateString,
+      isManualEntry: true,
+      manualFoodName: trimmedName,
+      notes: input.notes,
+    });
+
     const dailySummary = await this.calcService.recalculateDailySummary(
       userId,
       dateString

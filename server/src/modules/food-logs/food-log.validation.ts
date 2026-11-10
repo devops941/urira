@@ -25,7 +25,24 @@ export const QueryFoodLogHistorySchema = z.object({
   mealType: z.nativeEnum(MealType).optional(),
 });
 
+export const CreateManualFoodLogSchema = z.object({
+  foodName: z.string().min(2, 'Food name must be at least 2 characters').max(100),
+  mealType: z.nativeEnum(MealType),
+  quantity: z.number().positive('Quantity must be greater than 0').default(1),
+  unit: z.string().min(1, 'Unit is required').default('serving'),
+  weightGrams: z.number().positive().optional(),
+  calories: z.number().min(0, 'Calories cannot be negative'),
+  protein: z.number().min(0).default(0),
+  carbohydrates: z.number().min(0).default(0),
+  fat: z.number().min(0).default(0),
+  fiber: z.number().min(0).default(0),
+  consumedAt: z.string().datetime().optional(),
+  notes: z.string().max(300).optional(),
+  saveToCustomFoods: z.boolean().default(true),
+});
+
 export type CreateFoodLogInput = z.infer<typeof CreateFoodLogSchema>;
+export type CreateManualFoodLogInput = z.infer<typeof CreateManualFoodLogSchema>;
 export type UpdateFoodLogInput = z.infer<typeof UpdateFoodLogSchema>;
 export type QueryFoodLogHistoryInput = z.infer<typeof QueryFoodLogHistorySchema>;
 

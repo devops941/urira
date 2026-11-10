@@ -602,7 +602,7 @@ export default function NutritionDashboardScreen() {
                             <View key={log._id} style={styles.foodItemRow}>
                               <View style={styles.foodItemInfo}>
                                 <Text style={styles.foodItemName}>
-                                  {log.foodId?.name || 'Logged Food'}
+                                  {log.foodId?.name || log.manualFoodName || 'Logged Food'}
                                 </Text>
                                 <Text style={styles.foodItemMeta}>
                                   {log.quantity} {log.unit} • {log.weightGrams}g • {log.calculatedNutrition?.protein || 0}g protein
@@ -614,7 +614,7 @@ export default function NutritionDashboardScreen() {
                                 </Text>
                                 <TouchableOpacity
                                   onPress={() =>
-                                    handleDeleteFoodLog(log._id, log.foodId?.name || 'Food')
+                                    handleDeleteFoodLog(log._id, log.foodId?.name || log.manualFoodName || 'Food')
                                   }
                                   style={styles.deleteButton}
                                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
