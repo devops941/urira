@@ -101,6 +101,34 @@ export interface INutritionSummary {
   mealBreakdown: IMealBreakdown;
 }
 
+export interface IFoodLogRangeDay {
+  date: string;
+  label: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  loggedMealsCount: number;
+}
+
+export interface IFoodLogRangeSummary {
+  startDate: string;
+  endDate: string;
+  daysCount: number;
+  totalCalories: number;
+  avgDailyCalories: number;
+  totalProteinGrams: number;
+  totalCarbsGrams: number;
+  totalFatGrams: number;
+  totalFiberGrams: number;
+  avgDailyProtein: number;
+  avgDailyCarbs: number;
+  avgDailyFat: number;
+  mealBreakdown: Record<string, { count: number; calories: number }>;
+  dailyBreakdown: IFoodLogRangeDay[];
+  logs: IFoodLog[];
+}
+
 export interface IDietSuggestionItem {
   foodId: string;
   name: string;

@@ -11,6 +11,7 @@ router.post('/', controller.addMedication);
 router.get('/', controller.getActiveMedications);
 router.get('/today', controller.getTodaySchedule);
 router.get('/adherence/summary', controller.getAdherenceSummary);
+router.get('/range', controller.getRangeSummary);
 router.get('/:id', controller.getMedicationById);
 router.patch('/:id', controller.updateMedication);
 router.delete('/:id', controller.deleteMedication);

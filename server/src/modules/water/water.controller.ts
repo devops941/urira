@@ -57,6 +57,22 @@ export class WaterController {
     }
   };
 
+  getRangeSummary = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?._id;
+      const startDate = typeof req.query.startDate === 'string' ? req.query.startDate : undefined;
+      const endDate = typeof req.query.endDate === 'string' ? req.query.endDate : undefined;
+      const summary = await this.service.getRangeSummary(userId, startDate, endDate);
+
+      res.status(200).json({
+        success: true,
+        data: summary,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
   getHistory = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?._id;

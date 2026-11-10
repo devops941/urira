@@ -9,6 +9,7 @@ router.use(requireAuth);
 
 router.post('/', controller.addSleepRecord);
 router.get('/latest', controller.getLatest);
+router.get('/range', controller.getRangeSummary);
 router.get('/summary', controller.getWeeklySummary);
 router.get('/history', controller.getHistory);
 router.patch('/:id', controller.updateSleepRecord);

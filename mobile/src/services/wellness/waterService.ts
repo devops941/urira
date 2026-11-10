@@ -2,6 +2,7 @@ import { apiClient } from '../api/axiosInstance';
 import {
   IWaterTodaySummary,
   IWeeklyWater,
+  IWaterRangeSummary,
   BeverageType,
   IWaterLog,
 } from '../../types/wellness';
@@ -13,11 +14,13 @@ export const waterService = {
     beverageType?: BeverageType | string;
     beverageName?: string;
     notes?: string;
+    dateString?: string;
   }): Promise<{ log: IWaterLog; todaySummary: IWaterTodaySummary }> {
     const payload = {
       quantityMl: data.quantityMl || data.amountMl || 250,
       beverageType: data.beverageType === 'TEA' || data.beverageType === 'COFFEE' ? 'TEA_COFFEE' : data.beverageType || 'WATER',
       notes: data.notes || data.beverageName,
+      dateString: data.dateString,
     };
     const res = await apiClient.post('/water', payload);
     return res.data.data;
@@ -27,8 +30,14 @@ export const waterService = {
     return this.logWater(data);
   },
 
-  async getTodaySummary(): Promise<IWaterTodaySummary> {
-    const res = await apiClient.get('/water/today');
+  async getTodaySummary(targetDate?: string): Promise<IWaterTodaySummary> {
+    const url = targetDate ? `/water/today?date=${targetDate}` : '/water/today';
+    const res = await apiClient.get(url);
+    return res.data.data;
+  },
+
+  async getRangeSummary(startDate: string, endDate: string): Promise<IWaterRangeSummary> {
+    const res = await apiClient.get(`/water/range?startDate=${startDate}&endDate=${endDate}`);
     return res.data.data;
   },
 

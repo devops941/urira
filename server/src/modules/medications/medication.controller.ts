@@ -142,5 +142,33 @@ export class MedicationController {
       next(error);
     }
   };
+
+  getRangeSummary = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?._id;
+      const { startDate, endDate } = req.query;
+
+      if (!startDate || !endDate) {
+        res.status(400).json({
+          success: false,
+          message: 'Both startDate and endDate (YYYY-MM-DD) are required',
+        });
+        return;
+      }
+
+      const summary = await this.service.getRangeSummary(
+        userId,
+        String(startDate),
+        String(endDate)
+      );
+
+      res.status(200).json({
+        success: true,
+        data: summary,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
 }
 

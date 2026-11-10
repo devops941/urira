@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -21,22 +21,23 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
-  Calendar,
   Sparkles,
   X,
   Bell,
   BellRing,
-  AlertCircle,
-  Volume2,
+  TrendingUp,
 } from 'lucide-react-native';
 import * as Notifications from 'expo-notifications';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { AppHeader } from '../../../components/common/AppHeader';
+import { PeriodFilterBar, FilterMode } from '../../../components/common/PeriodFilterBar';
+import { InteractiveCalendarModal } from '../../../components/common/InteractiveCalendarModal';
 import { medicationService } from '../../../services/wellness/medicationService';
 import { medicationAlarmService } from '../../../services/notifications/medicationAlarmService';
 import {
   MedicationDto,
   TodayDoseItemDto,
+  IMedicationRangeSummary,
   MedicationType,
   MedicationFrequency,
   FoodInstruction,
@@ -73,9 +74,6 @@ interface ActiveAlarmState {
   isAlarm: boolean;
 }
 
-/**
- * Format a 24-hour "HH:mm" string into user-friendly 12-hour "hh:mm AM/PM"
- */
 export const formatTo12Hour = (time24: string): string => {
   if (!time24) return '';
   const parts = time24.split(':');
@@ -88,21 +86,73 @@ export const formatTo12Hour = (time24: string): string => {
   return `${hour12.toString().padStart(2, '0')}:${min} ${ampm}`;
 };
 
-/**
- * Format a Date object into 24-hour "HH:mm" for the backend
- */
 export const formatDateTo24Hour = (date: Date): string => {
   const h = date.getHours().toString().padStart(2, '0');
   const m = date.getMinutes().toString().padStart(2, '0');
   return `${h}:${m}`;
 };
 
+const toDateString = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const getTodayString = (): string => toDateString(new Date());
+
+const parseDateString = (str: string): Date => {
+  const [y, m, d] = str.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
+
+const getWeekRange = (dateStr: string) => {
+  const date = parseDateString(dateStr);
+  const dayOfWeek = date.getDay();
+  const diffToMon = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(date);
+  monday.setDate(date.getDate() + diffToMon);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  return { start: toDateString(monday), end: toDateString(sunday) };
+};
+
+const getMonthRange = (yearMonthStr: string) => {
+  const [y, m] = yearMonthStr.split('-').map(Number);
+  const start = `${y}-${String(m).padStart(2, '0')}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const end = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  return { start, end };
+};
+
 export default function MedicationsScreen() {
   const router = useRouter();
+  const todayStr = useMemo(() => getTodayString(), []);
+
+  // Filter Mode State
+  const [filterMode, setFilterMode] = useState<FilterMode>('DAY');
+  const [selectedDay, setSelectedDay] = useState<string>(todayStr);
+  const [weekAnchor, setWeekAnchor] = useState<string>(todayStr);
+  const [monthAnchor, setMonthAnchor] = useState<string>(todayStr.substring(0, 7));
+  const [yearAnchor, setYearAnchor] = useState<number>(new Date().getFullYear());
+  const [customRange, setCustomRange] = useState<{ start: string; end: string }>({
+    start: (() => {
+      const d = new Date();
+      d.setDate(d.getDate() - 6);
+      return toDateString(d);
+    })(),
+    end: todayStr,
+  });
+
+  // Calendar Modal State
+  const [calendarModalVisible, setCalendarModalVisible] = useState(false);
+
+  // Data States
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [todayDoses, setTodayDoses] = useState<TodayDoseItemDto[]>([]);
   const [activeMeds, setActiveMeds] = useState<MedicationDto[]>([]);
+  const [rangeSummary, setRangeSummary] = useState<IMedicationRangeSummary | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Add Medication Modal State
@@ -122,19 +172,116 @@ export default function MedicationsScreen() {
   // Active Alarm / Notification Trigger State
   const [activeAlarmDose, setActiveAlarmDose] = useState<ActiveAlarmState | null>(null);
 
+  // Active Period Computation
+  const activePeriod = useMemo(() => {
+    if (filterMode === 'DAY') {
+      const isToday = selectedDay === todayStr;
+      const isYesterday = (() => {
+        const y = new Date();
+        y.setDate(y.getDate() - 1);
+        return selectedDay === toDateString(y);
+      })();
+
+      const d = parseDateString(selectedDay);
+      let title = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      if (isToday) title = 'Today';
+      else if (isYesterday) title = 'Yesterday';
+
+      return {
+        startDate: selectedDay,
+        endDate: selectedDay,
+        title,
+        subtitle: d.toLocaleDateString('en-US', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }),
+        isCurrent: isToday,
+      };
+    }
+
+    if (filterMode === 'WEEK') {
+      const { start, end } = getWeekRange(weekAnchor);
+      const isCurrentWeek = getWeekRange(todayStr).start === start;
+      const startD = parseDateString(start);
+      const endD = parseDateString(end);
+      const title = isCurrentWeek
+        ? 'This Week'
+        : `${startD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${endD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+      return {
+        startDate: start,
+        endDate: end,
+        title,
+        subtitle: `${startD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} to ${endD.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+        isCurrent: isCurrentWeek,
+      };
+    }
+
+    if (filterMode === 'MONTH') {
+      const { start, end } = getMonthRange(monthAnchor);
+      const isCurrentMonth = todayStr.substring(0, 7) === monthAnchor;
+      const [y, m] = monthAnchor.split('-').map(Number);
+      const monthDate = new Date(y, m - 1, 1);
+      const title = monthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      return {
+        startDate: start,
+        endDate: end,
+        title,
+        subtitle: isCurrentMonth ? 'Current Month' : `${monthDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`,
+        isCurrent: isCurrentMonth,
+      };
+    }
+
+    if (filterMode === 'YEAR') {
+      const isCurrentYear = new Date().getFullYear() === yearAnchor;
+      return {
+        startDate: `${yearAnchor}-01-01`,
+        endDate: `${yearAnchor}-12-31`,
+        title: `Year ${yearAnchor}`,
+        subtitle: `Jan 01, ${yearAnchor} – Dec 31, ${yearAnchor}`,
+        isCurrent: isCurrentYear,
+      };
+    }
+
+    // CUSTOM
+    const diffDays = Math.max(
+      1,
+      Math.round(
+        (parseDateString(customRange.end).getTime() - parseDateString(customRange.start).getTime()) /
+          (1000 * 60 * 60 * 24)
+      ) + 1
+    );
+    const startD = parseDateString(customRange.start);
+    const endD = parseDateString(customRange.end);
+    return {
+      startDate: customRange.start,
+      endDate: customRange.end,
+      title: `${startD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${endD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+      subtitle: `Custom Filter • ${diffDays} Days Range`,
+      isCurrent: customRange.end === todayStr,
+    };
+  }, [filterMode, selectedDay, weekAnchor, monthAnchor, yearAnchor, customRange, todayStr]);
+
+  const inFlightRef = React.useRef(false);
   const loadData = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
-      const doses = await medicationService.getTodayDoses();
-      setTodayDoses(doses);
       const meds = await medicationService.getMedications();
       setActiveMeds(meds);
+
+      if (filterMode === 'DAY') {
+        const doses = await medicationService.getTodayDoses();
+        setTodayDoses(doses);
+        setRangeSummary(null);
+      } else {
+        const rngRes = await medicationService.getRangeSummary(activePeriod.startDate, activePeriod.endDate);
+        setRangeSummary(rngRes);
+      }
     } catch (err: any) {
       console.warn('Failed to load medication data:', err.message);
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [filterMode, activePeriod.startDate, activePeriod.endDate]);
 
   useEffect(() => {
     loadData();
@@ -146,7 +293,6 @@ export default function MedicationsScreen() {
     let responseListener: any = null;
 
     try {
-      // Listen to incoming notifications in foreground
       notifListener = Notifications.addNotificationReceivedListener((notification) => {
         const data: any = notification.request.content.data;
         if (data?.type === 'MEDICATION_REMINDER') {
@@ -164,7 +310,6 @@ export default function MedicationsScreen() {
         }
       });
 
-      // Listen to user tapping a popup notification banner
       responseListener = Notifications.addNotificationResponseReceivedListener((response) => {
         const data: any = response.notification.request.content.data;
         if (data?.type === 'MEDICATION_REMINDER') {
@@ -197,6 +342,68 @@ export default function MedicationsScreen() {
     loadData();
   };
 
+  // Stepper handlers (< and >)
+  const handlePrevPeriod = () => {
+    if (filterMode === 'DAY') {
+      const cur = parseDateString(selectedDay);
+      cur.setDate(cur.getDate() - 1);
+      setSelectedDay(toDateString(cur));
+    } else if (filterMode === 'WEEK') {
+      const cur = parseDateString(weekAnchor);
+      cur.setDate(cur.getDate() - 7);
+      setWeekAnchor(toDateString(cur));
+    } else if (filterMode === 'MONTH') {
+      const [y, m] = monthAnchor.split('-').map(Number);
+      const cur = new Date(y, m - 2, 1);
+      setMonthAnchor(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`);
+    } else if (filterMode === 'YEAR') {
+      setYearAnchor((prev) => prev - 1);
+    }
+  };
+
+  const handleNextPeriod = () => {
+    if (activePeriod.isCurrent) return;
+
+    if (filterMode === 'DAY') {
+      const cur = parseDateString(selectedDay);
+      cur.setDate(cur.getDate() + 1);
+      const nextStr = toDateString(cur);
+      if (nextStr <= todayStr) setSelectedDay(nextStr);
+    } else if (filterMode === 'WEEK') {
+      const cur = parseDateString(weekAnchor);
+      cur.setDate(cur.getDate() + 7);
+      setWeekAnchor(toDateString(cur));
+    } else if (filterMode === 'MONTH') {
+      const [y, m] = monthAnchor.split('-').map(Number);
+      const cur = new Date(y, m, 1);
+      const nextYM = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
+      if (nextYM <= todayStr.substring(0, 7)) setMonthAnchor(nextYM);
+    } else if (filterMode === 'YEAR') {
+      if (yearAnchor < new Date().getFullYear()) setYearAnchor((prev) => prev + 1);
+    }
+  };
+
+  const handleGoToday = () => {
+    setSelectedDay(todayStr);
+    setWeekAnchor(todayStr);
+    setMonthAnchor(todayStr.substring(0, 7));
+    setYearAnchor(new Date().getFullYear());
+  };
+
+  const handleApplyCalendar = (start: string, end: string, mode: 'DAY' | 'WEEK' | 'CUSTOM') => {
+    if (mode === 'DAY') {
+      setFilterMode('DAY');
+      setSelectedDay(start);
+    } else if (mode === 'WEEK') {
+      setFilterMode('WEEK');
+      setWeekAnchor(start);
+    } else {
+      setFilterMode('CUSTOM');
+      setCustomRange({ start, end });
+    }
+    setCalendarModalVisible(false);
+  };
+
   const handleLogStatus = async (medicationId: string, scheduledTime: string, status: 'TAKEN' | 'SKIPPED') => {
     try {
       await medicationService.recordDoseEvent(medicationId, {
@@ -209,9 +416,6 @@ export default function MedicationsScreen() {
     }
   };
 
-  /**
-   * Handle Time Picker Selection
-   */
   const handleTimePickerChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
     if (Platform.OS === 'android') {
       setShowTimePicker(false);
@@ -227,9 +431,6 @@ export default function MedicationsScreen() {
     }
   };
 
-  /**
-   * Toggle a Quick Preset Time (1-Tap Add/Remove)
-   */
   const handleTogglePresetTime = (preset24: string) => {
     if (scheduledTimes.includes(preset24)) {
       if (scheduledTimes.length <= 1) {
@@ -242,9 +443,6 @@ export default function MedicationsScreen() {
     }
   };
 
-  /**
-   * Remove a Scheduled Time
-   */
   const handleRemoveTime = (timeToRemove: string) => {
     if (scheduledTimes.length <= 1) {
       Alert.alert('Required Time', 'At least one scheduled dose time is required.');
@@ -253,9 +451,6 @@ export default function MedicationsScreen() {
     setScheduledTimes((prev) => prev.filter((t) => t !== timeToRemove));
   };
 
-  /**
-   * Save medication to server and schedule local popup notifications / alarms
-   */
   const performSave = async (shouldSetAlarm: boolean, times: string[]) => {
     try {
       setSubmitting(true);
@@ -271,7 +466,6 @@ export default function MedicationsScreen() {
         alarmEnabled: shouldSetAlarm,
       });
 
-      // Schedule local notification / alarm
       const medId = (createdMed as any)?._id || (createdMed as any)?.id || Math.random().toString();
       await medicationAlarmService.scheduleMedicationDoses({
         id: medId,
@@ -293,7 +487,7 @@ export default function MedicationsScreen() {
       Alert.alert(
         'Medication Scheduled',
         shouldSetAlarm
-          ? `⏰ Loud Alarm & Popup Notification set for ${readableTimes}. At scheduled time, your phone will ring and show an alert popup!`
+          ? `⏰ Loud Alarm & Popup Notification set for ${readableTimes}.`
           : `🔔 Popup Notification scheduled for ${readableTimes}.`
       );
     } catch (err: any) {
@@ -308,9 +502,6 @@ export default function MedicationsScreen() {
     }
   };
 
-  /**
-   * Add Medication Handler: Checks validation, then asks for alarm confirmation if not enabled
-   */
   const handleAddMedication = async () => {
     if (!medName.trim()) {
       Alert.alert('Required Field', 'Please enter the medication name');
@@ -329,35 +520,21 @@ export default function MedicationsScreen() {
     const times = scheduledTimes;
     const readableTimes = times.map(formatTo12Hour).join(', ');
 
-    // If the alarm toggle was NOT turned ON in the form, prompt the user:
     if (!alarmEnabled) {
       Alert.alert(
         'Set Alarm? (அலாரம் செட் பண்ணவா?)',
         `Would you like to set a ringing alarm for ${medName.trim()} at ${readableTimes}?`,
         [
-          {
-            text: 'Notification Only 🔔',
-            onPress: () => performSave(false, times),
-          },
-          {
-            text: 'Yes, Set Alarm ⏰',
-            onPress: () => performSave(true, times),
-          },
-          {
-            text: 'Cancel',
-            style: 'cancel',
-          },
+          { text: 'Notification Only 🔔', onPress: () => performSave(false, times) },
+          { text: 'Yes, Set Alarm ⏰', onPress: () => performSave(true, times) },
+          { text: 'Cancel', style: 'cancel' },
         ]
       );
     } else {
-      // Toggle was already selected ON in the form
       await performSave(true, times);
     }
   };
 
-  /**
-   * Delete medication & cancel its scheduled alarms
-   */
   const handleDeleteMedication = async (id: string, name: string) => {
     Alert.alert('Delete Medication', `Are you sure you want to stop tracking ${name}?`, [
       { text: 'Cancel', style: 'cancel' },
@@ -377,9 +554,6 @@ export default function MedicationsScreen() {
     ]);
   };
 
-  /**
-   * Quick test function so user can verify notifications and alarms immediately
-   */
   const handleTestAlarm = async () => {
     await medicationAlarmService.init();
     Alert.alert(
@@ -412,14 +586,18 @@ export default function MedicationsScreen() {
     }, 3000);
   };
 
-  // Calculate adherence
+  // Metrics computation
+  const isDayMode = filterMode === 'DAY';
   const totalDosesToday = todayDoses.length;
   const takenDosesToday = todayDoses.filter((d) => d.status === 'TAKEN').length;
-  const adherencePct = totalDosesToday > 0 ? Math.round((takenDosesToday / totalDosesToday) * 100) : 100;
+  const skippedDosesToday = todayDoses.filter((d) => d.status === 'SKIPPED').length;
+  const adherencePct = isDayMode
+    ? (totalDosesToday > 0 ? Math.round((takenDosesToday / totalDosesToday) * 100) : 100)
+    : (rangeSummary?.adherenceRate || 100);
 
   return (
     <View style={styles.container}>
-      <AppHeader title="Medication Schedule" />
+      <AppHeader title="Medication Schedule" showBack onBackPress={() => router.back()} />
 
       <ScrollView
         style={styles.scroll}
@@ -427,6 +605,25 @@ export default function MedicationsScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />}
         showsVerticalScrollIndicator={false}
       >
+        {/* Unified Period Filter Bar */}
+        <PeriodFilterBar
+          activeMode={filterMode}
+          onModeChange={(mode) => {
+            setFilterMode(mode);
+            if (mode === 'CUSTOM') setCalendarModalVisible(true);
+          }}
+          title={activePeriod.title}
+          subtitle={activePeriod.subtitle}
+          isCurrentPeriod={activePeriod.isCurrent}
+          onPrev={handlePrevPeriod}
+          onNext={handleNextPeriod}
+          onOpenCalendar={() => setCalendarModalVisible(true)}
+          onGoToday={handleGoToday}
+          accentColor={colors.primary}
+          accentLightBg={MED_BG_LIGHT}
+          accentBorder={MED_BORDER}
+        />
+
         {/* Adherence Hero Card */}
         <View style={styles.heroCard}>
           <View style={styles.heroHeader}>
@@ -434,9 +631,13 @@ export default function MedicationsScreen() {
               <Pill size={24} color={colors.primary} />
             </View>
             <View style={styles.heroHeaderText}>
-              <Text style={styles.heroTitle}>Today's Adherence</Text>
+              <Text style={styles.heroTitle}>
+                {isDayMode ? `${activePeriod.title}'s Adherence` : 'Period Adherence'}
+              </Text>
               <Text style={styles.heroSubtitle}>
-                {takenDosesToday} of {totalDosesToday} doses taken
+                {isDayMode
+                  ? `${takenDosesToday} of ${totalDosesToday} doses taken`
+                  : `${rangeSummary?.takenCount || 0} of ${rangeSummary?.totalDoses || 0} total doses taken`}
               </Text>
             </View>
             <View style={styles.adherenceBadge}>
@@ -449,22 +650,40 @@ export default function MedicationsScreen() {
             <View style={[styles.progressFill, { width: `${adherencePct}%` }]} />
           </View>
 
-          <View style={styles.heroTips}>
-            <Bell size={14} color={colors.primary} />
-            <Text style={styles.heroTipsText}>
-              Consistent adherence ensures maximum clinical therapy effectiveness.
-            </Text>
+          {/* Summary Stats Row */}
+          <View style={styles.statsRow}>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>Taken</Text>
+              <Text style={[styles.statValue, { color: MED_GREEN }]}>
+                {isDayMode ? takenDosesToday : (rangeSummary?.takenCount || 0)}
+              </Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>Skipped</Text>
+              <Text style={[styles.statValue, { color: '#EF4444' }]}>
+                {isDayMode ? skippedDosesToday : (rangeSummary?.skippedCount || 0)}
+              </Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>Scheduled</Text>
+              <Text style={styles.statValue}>
+                {isDayMode ? totalDosesToday : (rangeSummary?.totalDoses || 0)}
+              </Text>
+            </View>
           </View>
 
-          {/* Quick Alarm Test Button */}
-          <TouchableOpacity
-            style={styles.testAlarmBtn}
-            onPress={handleTestAlarm}
-            activeOpacity={0.7}
-          >
-            <BellRing size={14} color={colors.primary} />
-            <Text style={styles.testAlarmBtnText}>Test Popup Notification & Alarm (3s)</Text>
-          </TouchableOpacity>
+          {isDayMode && (
+            <TouchableOpacity
+              style={styles.testAlarmBtn}
+              onPress={handleTestAlarm}
+              activeOpacity={0.7}
+            >
+              <BellRing size={14} color={colors.primary} />
+              <Text style={styles.testAlarmBtnText}>Test Popup Notification & Alarm (3s)</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Action Button: Add Medication */}
@@ -477,92 +696,128 @@ export default function MedicationsScreen() {
           <Text style={styles.addActionBtnText}>Add New Medication</Text>
         </TouchableOpacity>
 
-        {/* Today's Checklist */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Today's Doses</Text>
-        </View>
-
-        {loading ? (
-          <ActivityIndicator color={colors.primary} style={{ marginVertical: 20 }} />
-        ) : todayDoses.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Pill size={36} color={colors.secondaryText} style={{ opacity: 0.5 }} />
-            <Text style={styles.emptyTitle}>No medications scheduled for today</Text>
-            <Text style={styles.emptySubtitle}>Tap "Add New Medication" to register your prescription plan.</Text>
-          </View>
-        ) : (
-          <View style={styles.doseList}>
-            {todayDoses.map((dose, idx) => {
-              const isTaken = dose.status === 'TAKEN';
-              const isSkipped = dose.status === 'SKIPPED';
-              const parentMed = activeMeds.find((m) => (m._id || m.id) === dose.medicationId);
-              const hasAlarm = dose.alarmEnabled ?? parentMed?.alarmEnabled ?? false;
-
-              return (
-                <View key={`${dose.medicationId}-${dose.scheduledTime}-${idx}`} style={styles.doseCard}>
-                  <View style={styles.doseLeft}>
-                    <View
-                      style={[
-                        styles.doseStatusIcon,
-                        isTaken && { backgroundColor: '#DCFCE7' },
-                        isSkipped && { backgroundColor: '#FEE2E2' },
-                      ]}
-                    >
-                      <Pill size={20} color={isTaken ? MED_GREEN : isSkipped ? '#EF4444' : colors.primary} />
+        {/* Daily Adherence Trend Chart (For Week/Month/Year/Custom) */}
+        {!isDayMode && rangeSummary?.dailyBreakdown && rangeSummary.dailyBreakdown.length > 0 && (
+          <View style={styles.chartCard}>
+            <View style={styles.chartHeader}>
+              <TrendingUp size={18} color={colors.primary} />
+              <Text style={styles.chartTitle}>Daily Adherence Breakdown</Text>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chartScroll}>
+              <View style={styles.chartContainer}>
+                {rangeSummary.dailyBreakdown.map((item, idx) => {
+                  const rate = item.adherenceRate || 0;
+                  return (
+                    <View key={item.date || idx} style={styles.barCol}>
+                      <Text style={styles.barValueText}>{item.totalScheduled > 0 ? `${rate}%` : ''}</Text>
+                      <View style={styles.barTrack}>
+                        <View
+                          style={[
+                            styles.barFill,
+                            { height: `${Math.max(8, rate)}%` },
+                            rate >= 80 && { backgroundColor: MED_GREEN },
+                          ]}
+                        />
+                      </View>
+                      <Text style={styles.barDayText}>{item.label}</Text>
                     </View>
-                    <View style={styles.doseInfo}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Text style={styles.medNameText}>{dose.name}</Text>
-                        {hasAlarm && (
-                          <View style={styles.alarmBadgeSmall}>
-                            <BellRing size={11} color="#EF4444" />
-                            <Text style={styles.alarmBadgeSmallText}>Alarm</Text>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          </View>
+        )}
+
+        {/* Day Mode Checklist */}
+        {isDayMode && (
+          <>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>{activePeriod.title}'s Doses ({todayDoses.length})</Text>
+            </View>
+
+            {loading ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: 20 }} />
+            ) : todayDoses.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Pill size={36} color={colors.secondaryText} style={{ opacity: 0.5 }} />
+                <Text style={styles.emptyTitle}>No medications scheduled for {activePeriod.title.toLowerCase()}</Text>
+                <Text style={styles.emptySubtitle}>Tap "Add New Medication" to register your prescription plan.</Text>
+              </View>
+            ) : (
+              <View style={styles.doseList}>
+                {todayDoses.map((dose, idx) => {
+                  const isTaken = dose.status === 'TAKEN';
+                  const isSkipped = dose.status === 'SKIPPED';
+                  const parentMed = activeMeds.find((m) => (m._id || m.id) === dose.medicationId);
+                  const hasAlarm = dose.alarmEnabled ?? parentMed?.alarmEnabled ?? false;
+
+                  return (
+                    <View key={`${dose.medicationId}-${dose.scheduledTime}-${idx}`} style={styles.doseCard}>
+                      <View style={styles.doseLeft}>
+                        <View
+                          style={[
+                            styles.doseStatusIcon,
+                            isTaken && { backgroundColor: '#DCFCE7' },
+                            isSkipped && { backgroundColor: '#FEE2E2' },
+                          ]}
+                        >
+                          <Pill size={20} color={isTaken ? MED_GREEN : isSkipped ? '#EF4444' : colors.primary} />
+                        </View>
+                        <View style={styles.doseInfo}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Text style={styles.medNameText}>{dose.name}</Text>
+                            {hasAlarm && (
+                              <View style={styles.alarmBadgeSmall}>
+                                <BellRing size={11} color="#EF4444" />
+                                <Text style={styles.alarmBadgeSmallText}>Alarm</Text>
+                              </View>
+                            )}
+                          </View>
+                          <Text style={styles.medDosageText}>
+                            {dose.strength || dose.dosage} • {(dose.foodInstruction || dose.instructions || 'Anytime').replace('_', ' ')}
+                          </Text>
+                          <View style={styles.timeTag}>
+                            <Clock size={12} color={colors.secondaryText} />
+                            <Text style={styles.timeTagText}>{formatTo12Hour(dose.scheduledTime)}</Text>
+                          </View>
+                        </View>
+                      </View>
+
+                      {/* Actions */}
+                      <View style={styles.doseActions}>
+                        {isTaken ? (
+                          <View style={styles.statusDoneBadge}>
+                            <CheckCircle2 size={16} color={MED_GREEN} />
+                            <Text style={styles.statusDoneText}>Taken</Text>
+                          </View>
+                        ) : isSkipped ? (
+                          <View style={styles.statusSkippedBadge}>
+                            <XCircle size={16} color="#EF4444" />
+                            <Text style={styles.statusSkippedText}>Skipped</Text>
+                          </View>
+                        ) : (
+                          <View style={styles.actionButtonsRow}>
+                            <TouchableOpacity
+                              style={styles.takeBtn}
+                              onPress={() => handleLogStatus(dose.medicationId, dose.scheduledTime, 'TAKEN')}
+                            >
+                              <Text style={styles.takeBtnText}>Take</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.skipBtn}
+                              onPress={() => handleLogStatus(dose.medicationId, dose.scheduledTime, 'SKIPPED')}
+                            >
+                              <Text style={styles.skipBtnText}>Skip</Text>
+                            </TouchableOpacity>
                           </View>
                         )}
                       </View>
-                      <Text style={styles.medDosageText}>
-                        {dose.strength || dose.dosage} • {(dose.foodInstruction || dose.instructions || 'Anytime').replace('_', ' ')}
-                      </Text>
-                      <View style={styles.timeTag}>
-                        <Clock size={12} color={colors.secondaryText} />
-                        <Text style={styles.timeTagText}>{formatTo12Hour(dose.scheduledTime)}</Text>
-                      </View>
                     </View>
-                  </View>
-
-                  {/* Actions */}
-                  <View style={styles.doseActions}>
-                    {isTaken ? (
-                      <View style={styles.statusDoneBadge}>
-                        <CheckCircle2 size={16} color={MED_GREEN} />
-                        <Text style={styles.statusDoneText}>Taken</Text>
-                      </View>
-                    ) : isSkipped ? (
-                      <View style={styles.statusSkippedBadge}>
-                        <XCircle size={16} color="#EF4444" />
-                        <Text style={styles.statusSkippedText}>Skipped</Text>
-                      </View>
-                    ) : (
-                      <View style={styles.actionButtonsRow}>
-                        <TouchableOpacity
-                          style={styles.takeBtn}
-                          onPress={() => handleLogStatus(dose.medicationId, dose.scheduledTime, 'TAKEN')}
-                        >
-                          <Text style={styles.takeBtnText}>Take</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.skipBtn}
-                          onPress={() => handleLogStatus(dose.medicationId, dose.scheduledTime, 'SKIPPED')}
-                        >
-                          <Text style={styles.skipBtnText}>Skip</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </View>
-                </View>
-              );
-            })}
-          </View>
+                  );
+                })}
+              </View>
+            )}
+          </>
         )}
 
         {/* Active Prescriptions List */}
@@ -614,6 +869,18 @@ export default function MedicationsScreen() {
         </View>
       </ScrollView>
 
+      {/* Interactive Calendar Modal */}
+      <InteractiveCalendarModal
+        visible={calendarModalVisible}
+        onClose={() => setCalendarModalVisible(false)}
+        initialStartDate={activePeriod.startDate}
+        initialEndDate={activePeriod.endDate}
+        initialMode={filterMode === 'DAY' ? 'DAY' : filterMode === 'WEEK' ? 'WEEK' : 'RANGE'}
+        onApply={handleApplyCalendar}
+        accentColor={colors.primary}
+        accentLightBg={MED_BG_LIGHT}
+      />
+
       {/* Add Medication Modal */}
       <Modal visible={showAddModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
@@ -659,9 +926,8 @@ export default function MedicationsScreen() {
                 ))}
               </View>
 
-              {/* Beautiful Unified Dose Times Card */}
+              {/* Dose Times Card */}
               <View style={styles.doseScheduleCard}>
-                {/* Header */}
                 <View style={styles.doseScheduleHeader}>
                   <View style={styles.doseScheduleTitleRow}>
                     <View style={styles.doseIconBadge}>
@@ -706,7 +972,6 @@ export default function MedicationsScreen() {
                   </View>
                 </View>
 
-                {/* Divider */}
                 <View style={styles.doseScheduleDivider} />
 
                 {/* Quick Presets Section */}
@@ -760,12 +1025,11 @@ export default function MedicationsScreen() {
                 </View>
               </View>
 
-              {/* Native DateTimePicker */}
               {showTimePicker && (
                 <DateTimePicker
                   value={pickerDate}
                   mode="time"
-                  is24Hour={false} // Enables 12-hour AM/PM dial
+                  is24Hour={false}
                   display={Platform.OS === 'android' ? 'default' : 'spinner'}
                   onChange={handleTimePickerChange}
                 />
@@ -786,7 +1050,6 @@ export default function MedicationsScreen() {
                 ))}
               </View>
 
-              {/* Alarm Option Toggle Row */}
               <View style={styles.alarmSwitchRow}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
                   <View style={[styles.alarmIconBadge, alarmEnabled && styles.alarmIconBadgeActive]}>
@@ -821,7 +1084,7 @@ export default function MedicationsScreen() {
         </View>
       </Modal>
 
-      {/* Active Alarm / Popup Notification Dialog */}
+      {/* Active Alarm Dialog */}
       <Modal visible={!!activeAlarmDose} transparent animationType="fade">
         <View style={styles.alarmModalOverlay}>
           <View style={styles.alarmModalCard}>
@@ -874,7 +1137,7 @@ export default function MedicationsScreen() {
 
                     Alert.alert(
                       'Alarm Snoozed (15 Mins)',
-                      `Alarm snoozed for 15 minutes. It will ring again at ${formatTo12Hour(snoozeTimeStr)} with alaram.wav sound.`
+                      `Alarm snoozed for 15 minutes. It will ring again at ${formatTo12Hour(snoozeTimeStr)}.`
                     );
                   }
                   medicationAlarmService.stopAlarmSound();
@@ -978,20 +1241,32 @@ const styles = StyleSheet.create({
     backgroundColor: MED_GREEN,
     borderRadius: 5,
   },
-  heroTips: {
+  statsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#F8FAFC',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 10,
+    justifyContent: 'space-between',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
   },
-  heroTipsText: {
+  statBox: {
     flex: 1,
-    fontSize: 11,
+    alignItems: 'center',
+  },
+  statLabel: {
+    fontSize: 12,
     color: colors.secondaryText,
-    lineHeight: 16,
+    marginBottom: 2,
+  },
+  statValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.primaryText,
+  },
+  statDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#F1F5F9',
   },
   testAlarmBtn: {
     flexDirection: 'row',
@@ -1004,7 +1279,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingVertical: 8,
     paddingHorizontal: 12,
-    marginTop: 4,
+    marginTop: 14,
   },
   testAlarmBtnText: {
     fontSize: 12,
@@ -1025,6 +1300,65 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700',
+  },
+  chartCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 20,
+  },
+  chartHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 16,
+  },
+  chartTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.primaryText,
+  },
+  chartScroll: {
+    paddingRight: 10,
+  },
+  chartContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    height: 140,
+    gap: 12,
+    paddingTop: 20,
+    paddingBottom: 6,
+  },
+  barCol: {
+    alignItems: 'center',
+    minWidth: 32,
+  },
+  barValueText: {
+    fontSize: 10,
+    color: colors.secondaryText,
+    marginBottom: 4,
+    fontWeight: '600',
+  },
+  barTrack: {
+    width: 14,
+    height: 90,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 7,
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
+  },
+  barFill: {
+    width: '100%',
+    backgroundColor: colors.primary,
+    borderRadius: 7,
+  },
+  barDayText: {
+    fontSize: 11,
+    color: colors.secondaryText,
+    fontWeight: '600',
+    marginTop: 6,
   },
   sectionHeader: {
     marginBottom: 12,
@@ -1160,6 +1494,7 @@ const styles = StyleSheet.create({
   },
   activeMedsList: {
     gap: 10,
+    marginBottom: 20,
   },
   medItemCard: {
     flexDirection: 'row',
@@ -1495,7 +1830,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
   },
-  // Alarm Modal Overlay & Card
   alarmModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.7)',

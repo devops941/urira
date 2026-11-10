@@ -162,6 +162,100 @@ export class WaterService {
     return { startDate, endDate, total: logs.length, logs };
   }
 
+  async getRangeSummary(userId: string, startDate?: string, endDate?: string) {
+    const today = this.getTodayString();
+    let startStr = startDate || today;
+    let endStr = endDate || startStr;
+
+    if (startStr > endStr) {
+      const tmp = startStr;
+      startStr = endStr;
+      endStr = tmp;
+    }
+
+    const logs = await this.repo.findLogsByDateRange(userId, startStr, endStr);
+    const goal = await this.getWaterGoal(userId);
+
+    let totalMl = 0;
+    const beverageMap: Record<string, number> = {};
+    const dayMap = new Map<string, number>();
+
+    for (const log of logs) {
+      totalMl += log.quantityMl;
+      beverageMap[log.beverageType] = (beverageMap[log.beverageType] || 0) + log.quantityMl;
+      dayMap.set(log.dateString, (dayMap.get(log.dateString) || 0) + log.quantityMl);
+    }
+
+    const startObj = new Date(startStr + 'T00:00:00Z');
+    const endObj = new Date(endStr + 'T00:00:00Z');
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const diffDays = Math.max(1, Math.round((endObj.getTime() - startObj.getTime()) / msPerDay) + 1);
+    const avgDailyMl = Math.round(totalMl / diffDays);
+
+    const dailyBreakdown: Array<{
+      date: string;
+      label: string;
+      totalMl: number;
+      targetMl: number;
+      achieved: boolean;
+    }> = [];
+
+    if (diffDays <= 35) {
+      const cur = new Date(startObj);
+      while (cur <= endObj) {
+        const dStr = cur.toISOString().split('T')[0];
+        const val = dayMap.get(dStr) || 0;
+        const label = cur.toLocaleDateString('en-US', { weekday: 'narrow' });
+        dailyBreakdown.push({
+          date: dStr,
+          label,
+          totalMl: val,
+          targetMl: goal.targetMl,
+          achieved: val >= goal.targetMl,
+        });
+        cur.setDate(cur.getDate() + 1);
+      }
+    } else {
+      const monthMap = new Map<string, number>();
+      for (const [dStr, val] of dayMap.entries()) {
+        const ym = dStr.substring(0, 7);
+        monthMap.set(ym, (monthMap.get(ym) || 0) + val);
+      }
+      const startYear = parseInt(startStr.substring(0, 4), 10);
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      for (let m = 1; m <= 12; m++) {
+        const mPad = m < 10 ? `0${m}` : `${m}`;
+        const ym = `${startYear}-${mPad}`;
+        const val = monthMap.get(ym) || 0;
+        const monthlyGoal = goal.targetMl * 30;
+        dailyBreakdown.push({
+          date: `${ym}-01`,
+          label: monthNames[m - 1],
+          totalMl: val,
+          targetMl: monthlyGoal,
+          achieved: val >= monthlyGoal,
+        });
+      }
+    }
+
+    const periodTargetMl = goal.targetMl * diffDays;
+    const progressPercentage = Math.min(100, Math.round((totalMl / (periodTargetMl || 1)) * 100));
+
+    return {
+      startDate: startStr,
+      endDate: endStr,
+      daysCount: diffDays,
+      targetMl: goal.targetMl,
+      periodTargetMl,
+      totalMl,
+      avgDailyMl,
+      progressPercentage,
+      beverageBreakdown: beverageMap,
+      dailyBreakdown,
+      logs,
+    };
+  }
+
   async updateWaterGoal(userId: string, input: UpdateWaterGoalInput) {
     return this.repo.upsertGoal(userId, input);
   }

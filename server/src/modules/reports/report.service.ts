@@ -5,6 +5,7 @@ import { SleepRecord } from '../sleep/sleep.model.js';
 import { Medication, MedicationDoseEvent } from '../medications/medication.model.js';
 import { VitalRecord } from '../vitals/vital.model.js';
 import { NutritionSummary } from '../nutrition/nutrition.model.js';
+import { FoodLog } from '../food-logs/food-log.model.js';
 import { HealthProfileModel } from '../health-profile/health-profile.model.js';
 import { BMIRecordModel } from '../bmi/bmi.model.js';
 import { UserModel } from '../users/user.model.js';
@@ -51,18 +52,56 @@ export interface TrendDataPoint {
   secondaryValue?: number;
 }
 
+/**
+ * Robust local calendar date string formatter (YYYY-MM-DD)
+ */
+function toLocalDateString(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export class ReportService {
-  private getDateRange(timeframe: 'daily' | 'weekly' | 'monthly'): { startDate: Date; endDate: Date } {
-    const end = new Date();
-    const start = new Date();
+  private getDateRange(timeframe: 'daily' | 'weekly' | 'monthly'): {
+    startDate: Date;
+    endDate: Date;
+    startStr: string;
+    endStr: string;
+    daysCount: number;
+  } {
+    const now = new Date();
+    const todayStr = toLocalDateString(now);
+
     if (timeframe === 'daily') {
-      start.setHours(0, 0, 0, 0);
+      return {
+        startDate: now,
+        endDate: now,
+        startStr: todayStr,
+        endStr: todayStr,
+        daysCount: 1,
+      };
     } else if (timeframe === 'weekly') {
-      start.setDate(end.getDate() - 7);
+      const start = new Date(now);
+      start.setDate(now.getDate() - 6);
+      return {
+        startDate: start,
+        endDate: now,
+        startStr: toLocalDateString(start),
+        endStr: todayStr,
+        daysCount: 7,
+      };
     } else {
-      start.setDate(end.getDate() - 30);
+      const start = new Date(now);
+      start.setDate(now.getDate() - 29);
+      return {
+        startDate: start,
+        endDate: now,
+        startStr: toLocalDateString(start),
+        endStr: todayStr,
+        daysCount: 30,
+      };
     }
-    return { startDate: start, endDate: end };
   }
 
   async getHealthDashboard(
@@ -70,10 +109,9 @@ export class ReportService {
     timeframe: 'daily' | 'weekly' | 'monthly' = 'weekly'
   ): Promise<HealthDashboardDto> {
     const userObjectId = new Types.ObjectId(userId);
-    const { startDate, endDate } = this.getDateRange(timeframe);
-    const startStr = startDate.toISOString().split('T')[0];
+    const { startStr, endStr, daysCount } = this.getDateRange(timeframe);
 
-    // Parallel data fetches
+    // Parallel multi-module database queries with exact range boundary matching
     const [
       profile,
       user,
@@ -83,99 +121,166 @@ export class ReportService {
       sleepRecords,
       medications,
       doses,
-      vitals,
+      latestVitals,
       nutritionSummaries,
+      foodLogs,
     ] = await Promise.all([
       HealthProfileModel.findOne({ userId: userObjectId }),
       UserModel.findById(userObjectId),
       BMIRecordModel.findOne({ userId: userObjectId }).sort({ calculatedAt: -1 }),
-      ActivityRecord.find({ userId: userObjectId, dateString: { $gte: startStr } }),
-      WaterLog.find({ userId: userObjectId, dateString: { $gte: startStr } }),
-      SleepRecord.find({ userId: userObjectId, dateString: { $gte: startStr } }),
+      ActivityRecord.find({ userId: userObjectId, dateString: { $gte: startStr, $lte: endStr } }),
+      WaterLog.find({ userId: userObjectId, dateString: { $gte: startStr, $lte: endStr } }),
+      SleepRecord.find({ userId: userObjectId, dateString: { $gte: startStr, $lte: endStr } }),
       Medication.find({ userId: userObjectId, isActive: true }),
-      MedicationDoseEvent.find({ userId: userObjectId, dateString: { $gte: startStr } }),
-      VitalRecord.find({ userId: userObjectId, measuredAt: { $gte: startDate } }).sort({ measuredAt: -1 }),
-      NutritionSummary.find({ userId: userObjectId, dateString: { $gte: startStr } }),
+      MedicationDoseEvent.find({ userId: userObjectId, dateString: { $gte: startStr, $lte: endStr } }),
+      VitalRecord.find({ userId: userObjectId }).sort({ measuredAt: -1 }).limit(10),
+      NutritionSummary.find({ userId: userObjectId, date: { $gte: startStr, $lte: endStr } }),
+      FoodLog.find({ userId: userObjectId, dateString: { $gte: startStr, $lte: endStr } }),
     ]);
 
-    // 1. Activity Score (Steps vs Goal)
-    const daysCount = timeframe === 'daily' ? 1 : timeframe === 'weekly' ? 7 : 30;
+    // 1. Physical Activity Score
     const totalSteps = activities.reduce((acc: number, a: any) => acc + (a.steps || 0), 0);
     const avgSteps = timeframe === 'daily' ? totalSteps : Math.round(totalSteps / daysCount);
-    const stepGoal = profile?.preferredStepGoal || 8000;
-    const stepRatio = Math.min(1.2, avgSteps / stepGoal);
+    const stepGoal = profile?.preferredStepGoal || 7000;
+    const stepRatio = Math.min(1.2, avgSteps / Math.max(stepGoal, 1));
     const stepScore = Math.min(100, Math.round(stepRatio * 100));
 
     // 2. Hydration Score
     const totalWater = waterLogs.reduce((acc: number, w: any) => acc + (w.quantityMl || 0), 0);
     const avgWater = timeframe === 'daily' ? totalWater : Math.round(totalWater / daysCount);
     const waterGoal = profile?.preferredWaterIntakeMl || 2500;
-    const waterRatio = Math.min(1.2, avgWater / waterGoal);
+    const waterRatio = Math.min(1.2, avgWater / Math.max(waterGoal, 1));
     const waterScore = Math.min(100, Math.round(waterRatio * 100));
 
-    // 3. Sleep Score
-    const avgSleepMinutes =
-      sleepRecords.length > 0
-        ? Math.round(sleepRecords.reduce((acc: number, s: any) => acc + (s.durationMinutes || 0), 0) / sleepRecords.length)
-        : 480;
+    // 3. Sleep Quality Score
     const sleepGoalHours = profile?.preferredSleepGoalHours || 8;
-    const sleepHours = avgSleepMinutes / 60;
-    const sleepScore = Math.max(30, Math.min(100, Math.round((1 - Math.abs(sleepHours - sleepGoalHours) / 4) * 100)));
+    let avgSleepMinutes = 0;
+    let sleepHours = 0;
+    let sleepScore = 0;
+    let sleepStatusLabel = 'No Sleep Log';
+
+    if (sleepRecords.length > 0) {
+      const totalSleepMins = sleepRecords.reduce((acc: number, s: any) => acc + (s.durationMinutes || 0), 0);
+      avgSleepMinutes = Math.round(totalSleepMins / (timeframe === 'daily' ? 1 : sleepRecords.length));
+      sleepHours = Number((avgSleepMinutes / 60).toFixed(1));
+      const sleepDiff = Math.abs(sleepHours - sleepGoalHours);
+      sleepScore = Math.max(20, Math.min(100, Math.round((1 - sleepDiff / 4) * 100)));
+      sleepStatusLabel = sleepScore >= 80 ? 'Optimal' : sleepScore >= 60 ? 'Good' : 'Needs Focus';
+    }
 
     // 4. Medication Adherence
-    const totalDoses = doses.length;
+    const scheduledDosesPerDay = medications.reduce(
+      (sum: number, m: any) => sum + (m.scheduledTimes?.length || 1),
+      0
+    );
+    const totalScheduled = scheduledDosesPerDay * daysCount;
     const takenDoses = doses.filter((d: any) => d.status === 'TAKEN').length;
-    const medScore = totalDoses > 0 ? Math.round((takenDoses / totalDoses) * 100) : 100;
+    let medScore = 100;
+    let medCurrentValue = 'No Meds Scheduled';
+    let medStatusLabel = 'No Active Meds';
 
-    // 5. Nutrition & Caloric Consistency
-    const totalCalories = nutritionSummaries.reduce((acc: number, n: any) => acc + (n.consumedCalories || 0), 0);
-    const avgCalories =
-      timeframe === 'daily'
-        ? (nutritionSummaries.length > 0 ? nutritionSummaries[0].consumedCalories || totalCalories : totalCalories)
-        : Math.round(totalCalories / daysCount);
+    if (medications.length > 0) {
+      if (totalScheduled > 0) {
+        medScore = Math.min(100, Math.round((takenDoses / totalScheduled) * 100));
+        medCurrentValue = `${medScore}% (${takenDoses}/${totalScheduled} doses)`;
+        medStatusLabel = medScore >= 80 ? 'Optimal' : medScore >= 50 ? 'Needs Focus' : 'Action Needed';
+      } else {
+        medScore = 100;
+        medCurrentValue = '0 doses scheduled';
+      }
+    }
+
+    // 5. Nutrition & Caloric Consistency (Multi-source aggregation: NutritionSummary + FoodLog)
+    const nutritionMap = new Map<string, { calories: number; protein: number; carbs: number; fat: number }>();
+    nutritionSummaries.forEach((s: any) => {
+      nutritionMap.set(s.date, {
+        calories: s.consumedCalories || 0,
+        protein: s.protein || 0,
+        carbs: s.carbohydrates || 0,
+        fat: s.fat || 0,
+      });
+    });
+    foodLogs.forEach((f: any) => {
+      if (!nutritionMap.has(f.dateString)) {
+        const existing = nutritionMap.get(f.dateString) || { calories: 0, protein: 0, carbs: 0, fat: 0 };
+        existing.calories += f.calculatedNutrition?.calories || 0;
+        existing.protein += f.calculatedNutrition?.protein || 0;
+        existing.carbs += f.calculatedNutrition?.carbohydrates || 0;
+        existing.fat += f.calculatedNutrition?.fat || 0;
+        nutritionMap.set(f.dateString, existing);
+      }
+    });
+
+    let totalCalories = 0;
+    nutritionMap.forEach((v) => {
+      totalCalories += v.calories;
+    });
+
+    const avgCalories = timeframe === 'daily' ? totalCalories : Math.round(totalCalories / daysCount);
     const calGoal = profile?.preferredDailyCalorieGoal || 2100;
-    const calDiffRatio = Math.abs(avgCalories - calGoal) / calGoal;
-    const nutritionScore = Math.max(40, Math.min(100, Math.round((1 - calDiffRatio) * 100)));
+    let nutritionScore = 0;
+    let nutritionStatusLabel = 'No Food Logged';
+
+    if (nutritionMap.size > 0 || avgCalories > 0) {
+      const calDiffRatio = Math.abs(avgCalories - calGoal) / calGoal;
+      nutritionScore = Math.max(30, Math.min(100, Math.round((1 - calDiffRatio) * 100)));
+      nutritionStatusLabel = nutritionScore >= 80 ? 'Optimal' : nutritionScore >= 60 ? 'Good' : 'Needs Focus';
+    }
 
     // 6. Vitals Stability
-    let vitalsScore = 85;
-    const hrRecord = vitals.find((v: any) => v.metricType === 'HEART_RATE');
-    const latestHr = hrRecord?.value || 72;
-    if (latestHr >= 60 && latestHr <= 100) vitalsScore += 5;
-    else vitalsScore -= 15;
+    const hrRecord = latestVitals.find((v: any) => v.metricType === 'HEART_RATE');
+    const bpRecord = latestVitals.find((v: any) => v.metricType === 'BLOOD_PRESSURE');
+    let vitalsScore = 50;
+    let vitalsLabel = 'Not Recorded';
+    let vitalsCurrentValue = 'Not Recorded';
+    let vitalsStatus: 'OPTIMAL' | 'GOOD' | 'NEEDS_ATTENTION' | 'CRITICAL' = 'NEEDS_ATTENTION';
 
-    const latestBp = vitals.find((v: any) => v.metricType === 'BLOOD_PRESSURE');
-    if (latestBp && latestBp.systolic && latestBp.diastolic) {
-      if (latestBp.systolic <= 120 && latestBp.diastolic <= 80) vitalsScore += 10;
-      else if (latestBp.systolic > 140 || latestBp.diastolic > 90) vitalsScore -= 20;
+    if (hrRecord?.value) {
+      const hr = hrRecord.value;
+      vitalsCurrentValue = `${hr} bpm`;
+      if (bpRecord?.systolic && bpRecord?.diastolic) {
+        vitalsCurrentValue += ` • ${bpRecord.systolic}/${bpRecord.diastolic} mmHg`;
+      }
+      if (hr >= 60 && hr <= 100) {
+        vitalsScore = 85;
+        vitalsStatus = 'OPTIMAL';
+        vitalsLabel = 'Optimal';
+      } else if (hr >= 50 && hr <= 110) {
+        vitalsScore = 70;
+        vitalsStatus = 'GOOD';
+        vitalsLabel = 'Normal';
+      } else {
+        vitalsScore = 40;
+        vitalsStatus = 'CRITICAL';
+        vitalsLabel = 'Abnormal';
+      }
     }
-    vitalsScore = Math.max(30, Math.min(100, vitalsScore));
 
-    // Overall Weighted Health Score
+    // Overall Weighted Health Score (Only rewards active data dimensions)
     const overallScore = Math.round(
       stepScore * 0.2 +
       nutritionScore * 0.2 +
       waterScore * 0.15 +
-      sleepScore * 0.15 +
-      vitalsScore * 0.15 +
+      (sleepRecords.length > 0 ? sleepScore * 0.15 : 0) +
+      (hrRecord?.value ? vitalsScore * 0.15 : 7.5) +
       medScore * 0.15
     );
 
     const getStatus = (score: number) => {
-      if (score >= 85) return { status: 'OPTIMAL' as const, label: 'Optimal' };
-      if (score >= 70) return { status: 'GOOD' as const, label: 'Good' };
-      if (score >= 50) return { status: 'NEEDS_ATTENTION' as const, label: 'Needs Focus' };
+      if (score >= 80) return { status: 'OPTIMAL' as const, label: 'Optimal' };
+      if (score >= 60) return { status: 'GOOD' as const, label: 'Good' };
+      if (score >= 40) return { status: 'NEEDS_ATTENTION' as const, label: 'Needs Focus' };
       return { status: 'CRITICAL' as const, label: 'Action Needed' };
     };
 
     const overallTag =
-      overallScore >= 85
+      overallScore >= 80
         ? 'Excellent Health Vitality'
-        : overallScore >= 70
+        : overallScore >= 65
         ? 'Healthy & Balanced'
-        : overallScore >= 50
+        : overallScore >= 45
         ? 'Moderate Wellness'
-        : 'Requires Clinical Attention';
+        : 'Requires Health Attention';
 
     const dimensions: HealthMetricDimension[] = [
       {
@@ -195,11 +300,11 @@ export class ReportService {
         name: 'Nutrition & Diet',
         score: nutritionScore,
         weight: 0.2,
-        status: getStatus(nutritionScore).status,
-        statusLabel: getStatus(nutritionScore).label,
+        status: nutritionScore > 0 ? getStatus(nutritionScore).status : 'NEEDS_ATTENTION',
+        statusLabel: nutritionStatusLabel,
         currentValue:
           timeframe === 'daily'
-            ? `${avgCalories.toLocaleString()} kcal today`
+            ? `${totalCalories.toLocaleString()} kcal today`
             : `${avgCalories.toLocaleString()} kcal/day (avg)`,
         targetValue: `${calGoal.toLocaleString()} kcal target`,
         color: '#F97316',
@@ -221,9 +326,9 @@ export class ReportService {
         name: 'Sleep Quality',
         score: sleepScore,
         weight: 0.15,
-        status: getStatus(sleepScore).status,
-        statusLabel: getStatus(sleepScore).label,
-        currentValue: `${sleepHours.toFixed(1)} hrs/night`,
+        status: sleepRecords.length > 0 ? getStatus(sleepScore).status : 'NEEDS_ATTENTION',
+        statusLabel: sleepStatusLabel,
+        currentValue: sleepRecords.length > 0 ? `${sleepHours.toFixed(1)} hrs/night` : 'No Log Recorded',
         targetValue: `${sleepGoalHours} hrs`,
         color: '#8B5CF6',
       },
@@ -231,9 +336,9 @@ export class ReportService {
         name: 'Vital Signs',
         score: vitalsScore,
         weight: 0.15,
-        status: getStatus(vitalsScore).status,
-        statusLabel: getStatus(vitalsScore).label,
-        currentValue: `${latestHr} bpm`,
+        status: vitalsStatus,
+        statusLabel: vitalsLabel,
+        currentValue: vitalsCurrentValue,
         targetValue: '60–100 bpm norm',
         color: '#E11D48',
       },
@@ -241,15 +346,15 @@ export class ReportService {
         name: 'Medication Adherence',
         score: medScore,
         weight: 0.15,
-        status: getStatus(medScore).status,
-        statusLabel: getStatus(medScore).label,
-        currentValue: `${medScore}% taken`,
+        status: medications.length > 0 ? getStatus(medScore).status : 'OPTIMAL',
+        statusLabel: medStatusLabel,
+        currentValue: medCurrentValue,
         targetValue: '100% adherence',
         color: '#16A34A',
       },
     ];
 
-    // Avatar Narrative Synthesis based on timeframe
+    // Living Avatar Narrative based on dynamic metrics
     const tier: 'PEAK' | 'ACTIVE' | 'LOW_ENERGY' | 'RECHARGE' =
       overallScore >= 80 ? 'PEAK' : overallScore >= 60 ? 'ACTIVE' : overallScore >= 40 ? 'LOW_ENERGY' : 'RECHARGE';
 
@@ -297,19 +402,26 @@ export class ReportService {
       `Overall composite wellness score stands at ${overallScore}/100 based on ${timeframe} tracking.`,
       avgSteps >= stepGoal
         ? 'Daily physical activity exceeds clinical recommendations.'
-        : `Daily physical activity averages ${avgSteps} steps; increasing brisk walking by 2,000 steps will improve cardiovascular resilience.`,
+        : `Daily physical activity averages ${avgSteps.toLocaleString()} steps; increasing brisk walking by 2,000 steps will improve cardiovascular resilience.`,
       avgWater >= waterGoal
         ? 'Hydration volume is maintained consistently.'
         : 'Daily water intake is below target; prioritize hydration intervals throughout work hours.',
-      medScore >= 90
-        ? 'Medication schedule is being followed with high clinical adherence.'
-        : 'Several scheduled medication doses were missed or unrecorded; set alarm alerts for reminder cues.',
     ];
 
+    if (medications.length > 0) {
+      observations.push(
+        medScore >= 90
+          ? 'Medication schedule is being followed with high clinical adherence.'
+          : 'Several scheduled medication doses were missed or unrecorded; set reminder cues.'
+      );
+    } else {
+      observations.push('No active medications scheduled in your clinical profile.');
+    }
+
     const recommendations: string[] = [
-      'Maintain continuous sleep schedule with at least 7.5 hours of dark, quiet rest.',
-      'Sustain balanced macronutrient distribution with 1.2g–1.6g protein per kg bodyweight.',
-      'Schedule quarterly blood pressure and lipid checks with your physician.',
+      'Maintain continuous sleep schedule with at least 7.5 hours of quiet rest.',
+      'Sustain balanced macronutrient distribution with adequate hydration.',
+      'Track quarterly blood pressure and heart rate readings.',
     ];
 
     const fullName = profile?.firstName
@@ -349,61 +461,86 @@ export class ReportService {
     const userObjectId = new Types.ObjectId(userId);
     const end = new Date();
     const start = new Date();
-    start.setDate(end.getDate() - days);
-    const startStr = start.toISOString().split('T')[0];
+    start.setDate(end.getDate() - (days - 1));
+    const startStr = toLocalDateString(start);
+    const endStr = toLocalDateString(end);
 
     const points: TrendDataPoint[] = [];
 
-    // Map each day
+    // Map each calendar day
     for (let i = days - 1; i >= 0; i--) {
       const d = new Date();
       d.setDate(end.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = toLocalDateString(d);
       const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       points.push({ date: dateStr, label, value: 0 });
     }
 
     if (metric === 'steps') {
-      const logs = await ActivityRecord.find({ userId: userObjectId, dateString: { $gte: startStr } });
+      const logs = await ActivityRecord.find({
+        userId: userObjectId,
+        dateString: { $gte: startStr, $lte: endStr },
+      });
       const map = new Map<string, number>();
       logs.forEach((l: any) => map.set(l.dateString, (map.get(l.dateString) || 0) + (l.steps || 0)));
       points.forEach((p) => {
         p.value = map.get(p.date) || 0;
       });
     } else if (metric === 'water') {
-      const logs = await WaterLog.find({ userId: userObjectId, dateString: { $gte: startStr } });
+      const logs = await WaterLog.find({
+        userId: userObjectId,
+        dateString: { $gte: startStr, $lte: endStr },
+      });
       const map = new Map<string, number>();
       logs.forEach((l: any) => map.set(l.dateString, (map.get(l.dateString) || 0) + (l.quantityMl || 0)));
       points.forEach((p) => {
         p.value = map.get(p.date) || 0;
       });
     } else if (metric === 'sleep') {
-      const logs = await SleepRecord.find({ userId: userObjectId, dateString: { $gte: startStr } });
+      const logs = await SleepRecord.find({
+        userId: userObjectId,
+        dateString: { $gte: startStr, $lte: endStr },
+      });
       const map = new Map<string, number>();
-      logs.forEach((l: any) => map.set(l.dateString, Number(((l.durationMinutes || 0) / 60).toFixed(1))));
+      logs.forEach((l: any) =>
+        map.set(l.dateString, Number(((l.durationMinutes || 0) / 60).toFixed(1)))
+      );
       points.forEach((p) => {
         p.value = map.get(p.date) || 0;
       });
     } else if (metric === 'calories') {
-      const summaries = await NutritionSummary.find({ userId: userObjectId, dateString: { $gte: startStr } });
+      const summaries = await NutritionSummary.find({
+        userId: userObjectId,
+        date: { $gte: startStr, $lte: endStr },
+      });
+      const foodLogs = await FoodLog.find({
+        userId: userObjectId,
+        dateString: { $gte: startStr, $lte: endStr },
+      });
       const map = new Map<string, number>();
-      summaries.forEach((s: any) => map.set(s.dateString, s.consumedCalories || 0));
+      summaries.forEach((s: any) => map.set(s.date, s.consumedCalories || 0));
+      foodLogs.forEach((f: any) => {
+        if (!map.has(f.dateString)) {
+          map.set(f.dateString, (map.get(f.dateString) || 0) + (f.calculatedNutrition?.calories || 0));
+        }
+      });
       points.forEach((p) => {
-        p.value = map.get(p.date) || 0;
+        p.value = Math.round(map.get(p.date) || 0);
       });
     } else if (metric === 'vitals') {
       const records = await VitalRecord.find({
         userId: userObjectId,
         metricType: 'HEART_RATE',
-        measuredAt: { $gte: start },
-      });
+      }).sort({ measuredAt: -1 });
       const map = new Map<string, number>();
       records.forEach((r: any) => {
-        const dStr = r.measuredAt.toISOString().split('T')[0];
-        map.set(dStr, r.value || 72);
+        const dStr = r.dateString || toLocalDateString(new Date(r.measuredAt));
+        if (!map.has(dStr)) {
+          map.set(dStr, r.value || 0);
+        }
       });
       points.forEach((p) => {
-        p.value = map.get(p.date) || 72;
+        p.value = map.get(p.date) || 0;
       });
     }
 

@@ -56,6 +56,30 @@ export interface IWeeklyActivity {
   history: IWeeklyActivityDay[];
 }
 
+export interface IActivityRangeDay {
+  date: string;
+  label: string;
+  steps: number;
+  distanceKm: number;
+  calories: number;
+  goal: number;
+  goalReached: boolean;
+}
+
+export interface IActivityRangeSummary {
+  startDate: string;
+  endDate: string;
+  daysCount: number;
+  stepGoal: number;
+  totalSteps: number;
+  totalDistanceKm: number;
+  totalActiveMinutes: number;
+  totalCalories: number;
+  avgDailySteps: number;
+  dailyBreakdown: IActivityRangeDay[];
+  records: IActivityRecord[];
+}
+
 // --- Water ---
 export enum BeverageType {
   WATER = 'WATER',
@@ -114,6 +138,33 @@ export interface IWeeklyWater {
   }>;
 }
 
+export interface IWaterRangeDay {
+  date: string;
+  label: string;
+  waterMl: number;
+  otherMl: number;
+  totalConsumedMl: number;
+  targetMl: number;
+  achieved: boolean;
+}
+
+export interface IWaterRangeSummary {
+  startDate: string;
+  endDate: string;
+  daysCount: number;
+  targetMl: number;
+  periodTargetMl: number;
+  totalWaterMl: number;
+  otherBeveragesMl: number;
+  totalConsumedMl: number;
+  avgDailyMl: number;
+  progressPercentage: number;
+  daysGoalAchieved: number;
+  beverageBreakdown: Record<string, number>;
+  dailyBreakdown: IWaterRangeDay[];
+  logs: IWaterLog[];
+}
+
 // --- Sleep ---
 export enum SleepQuality {
   VERY_GOOD = 'VERY_GOOD',
@@ -144,6 +195,29 @@ export interface ISleepLatestResponse {
   durationHours?: number;
   goalPercentage?: number;
   latest: ISleepRecord | null;
+}
+
+export interface ISleepRangeDay {
+  date: string;
+  label: string;
+  durationMinutes: number;
+  durationHours: number;
+  quality: string;
+  goalReached: boolean;
+}
+
+export interface ISleepRangeSummary {
+  startDate: string;
+  endDate: string;
+  daysCount: number;
+  sleepGoalHours: number;
+  totalHours: number;
+  avgDurationHours: number;
+  adherencePercentage: number;
+  optimalGoalNights: number;
+  qualityDistribution: Record<string, number>;
+  dailyBreakdown: ISleepRangeDay[];
+  records: ISleepRecord[];
 }
 
 // --- Medication ---
@@ -205,6 +279,28 @@ export interface ITodayMedicationSchedule {
   takenCount: number;
   adherencePercentage: number;
   doses: ITodayMedicationDose[];
+}
+
+export interface IMedicationRangeDay {
+  date: string;
+  label: string;
+  totalScheduled: number;
+  takenCount: number;
+  adherenceRate: number;
+}
+
+export interface IMedicationRangeSummary {
+  startDate: string;
+  endDate: string;
+  daysCount: number;
+  activeMedicationsCount: number;
+  totalDoses: number;
+  takenCount: number;
+  skippedCount: number;
+  missedCount: number;
+  adherenceRate: number;
+  dailyBreakdown: IMedicationRangeDay[];
+  history: any[];
 }
 
 // --- Vitals ---

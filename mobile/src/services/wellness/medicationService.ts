@@ -2,6 +2,7 @@ import { apiClient } from '../api/axiosInstance';
 import {
   IMedication,
   ITodayMedicationSchedule,
+  IMedicationRangeSummary,
   DoseStatus,
   MedicationType,
 } from '../../types/wellness';
@@ -53,6 +54,11 @@ export const medicationService = {
 
   async getTodaySchedule(): Promise<ITodayMedicationSchedule> {
     const res = await apiClient.get('/medications/today');
+    return res.data.data;
+  },
+
+  async getRangeSummary(startDate: string, endDate: string): Promise<IMedicationRangeSummary> {
+    const res = await apiClient.get(`/medications/range?startDate=${startDate}&endDate=${endDate}`);
     return res.data.data;
   },
 

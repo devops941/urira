@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,27 +10,25 @@ import {
   Alert,
   ActivityIndicator,
   RefreshControl,
-  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import {
   Moon,
   Clock,
-  Calendar,
   Sparkles,
   TrendingUp,
   Plus,
   Trash2,
   X,
-  Smile,
-  Meh,
-  Frown,
-  CheckCircle2,
+  PieChart,
 } from 'lucide-react-native';
 import { AppHeader } from '../../../components/common/AppHeader';
+import { PeriodFilterBar, FilterMode } from '../../../components/common/PeriodFilterBar';
+import { InteractiveCalendarModal } from '../../../components/common/InteractiveCalendarModal';
 import { sleepService } from '../../../services/wellness/sleepService';
 import {
   SleepRecordDto,
+  ISleepRangeSummary,
   SleepQuality,
 } from '../../../types/wellness';
 import { colors } from '../../../theme/colors';
@@ -46,12 +44,66 @@ const QUALITY_OPTIONS: { quality: SleepQuality; label: string; color: string }[]
   { quality: SleepQuality.POOR, label: 'Poor', color: '#EF4444' },
 ];
 
+const toDateString = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const getTodayString = (): string => toDateString(new Date());
+
+const parseDateString = (str: string): Date => {
+  const [y, m, d] = str.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
+
+const getWeekRange = (dateStr: string) => {
+  const date = parseDateString(dateStr);
+  const dayOfWeek = date.getDay();
+  const diffToMon = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(date);
+  monday.setDate(date.getDate() + diffToMon);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  return { start: toDateString(monday), end: toDateString(sunday) };
+};
+
+const getMonthRange = (yearMonthStr: string) => {
+  const [y, m] = yearMonthStr.split('-').map(Number);
+  const start = `${y}-${String(m).padStart(2, '0')}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const end = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  return { start, end };
+};
+
 export default function SleepTrackerScreen() {
   const router = useRouter();
+  const todayStr = useMemo(() => getTodayString(), []);
+
+  // Filter Mode State
+  const [filterMode, setFilterMode] = useState<FilterMode>('DAY');
+  const [selectedDay, setSelectedDay] = useState<string>(todayStr);
+  const [weekAnchor, setWeekAnchor] = useState<string>(todayStr);
+  const [monthAnchor, setMonthAnchor] = useState<string>(todayStr.substring(0, 7));
+  const [yearAnchor, setYearAnchor] = useState<number>(new Date().getFullYear());
+  const [customRange, setCustomRange] = useState<{ start: string; end: string }>({
+    start: (() => {
+      const d = new Date();
+      d.setDate(d.getDate() - 6);
+      return toDateString(d);
+    })(),
+    end: todayStr,
+  });
+
+  // Calendar Modal State
+  const [calendarModalVisible, setCalendarModalVisible] = useState(false);
+
+  // Data States
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [latestSleep, setLatestSleep] = useState<SleepRecordDto | null>(null);
-  const [weeklyHistory, setWeeklyHistory] = useState<SleepRecordDto[]>([]);
+  const [rangeSummary, setRangeSummary] = useState<ISleepRangeSummary | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Log Sleep Modal State
@@ -61,19 +113,117 @@ export default function SleepTrackerScreen() {
   const [selectedQuality, setSelectedQuality] = useState<SleepQuality>(SleepQuality.GOOD);
   const [sleepNotes, setSleepNotes] = useState('');
 
+  // Active Period Computation
+  const activePeriod = useMemo(() => {
+    if (filterMode === 'DAY') {
+      const isToday = selectedDay === todayStr;
+      const isYesterday = (() => {
+        const y = new Date();
+        y.setDate(y.getDate() - 1);
+        return selectedDay === toDateString(y);
+      })();
+
+      const d = parseDateString(selectedDay);
+      let title = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      if (isToday) title = 'Today';
+      else if (isYesterday) title = 'Yesterday';
+
+      return {
+        startDate: selectedDay,
+        endDate: selectedDay,
+        title,
+        subtitle: d.toLocaleDateString('en-US', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }),
+        isCurrent: isToday,
+      };
+    }
+
+    if (filterMode === 'WEEK') {
+      const { start, end } = getWeekRange(weekAnchor);
+      const isCurrentWeek = getWeekRange(todayStr).start === start;
+      const startD = parseDateString(start);
+      const endD = parseDateString(end);
+      const title = isCurrentWeek
+        ? 'This Week'
+        : `${startD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${endD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+      return {
+        startDate: start,
+        endDate: end,
+        title,
+        subtitle: `${startD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} to ${endD.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+        isCurrent: isCurrentWeek,
+      };
+    }
+
+    if (filterMode === 'MONTH') {
+      const { start, end } = getMonthRange(monthAnchor);
+      const isCurrentMonth = todayStr.substring(0, 7) === monthAnchor;
+      const [y, m] = monthAnchor.split('-').map(Number);
+      const monthDate = new Date(y, m - 1, 1);
+      const title = monthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      return {
+        startDate: start,
+        endDate: end,
+        title,
+        subtitle: isCurrentMonth ? 'Current Month' : `${monthDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`,
+        isCurrent: isCurrentMonth,
+      };
+    }
+
+    if (filterMode === 'YEAR') {
+      const isCurrentYear = new Date().getFullYear() === yearAnchor;
+      return {
+        startDate: `${yearAnchor}-01-01`,
+        endDate: `${yearAnchor}-12-31`,
+        title: `Year ${yearAnchor}`,
+        subtitle: `Jan 01, ${yearAnchor} – Dec 31, ${yearAnchor}`,
+        isCurrent: isCurrentYear,
+      };
+    }
+
+    // CUSTOM
+    const diffDays = Math.max(
+      1,
+      Math.round(
+        (parseDateString(customRange.end).getTime() - parseDateString(customRange.start).getTime()) /
+          (1000 * 60 * 60 * 24)
+      ) + 1
+    );
+    const startD = parseDateString(customRange.start);
+    const endD = parseDateString(customRange.end);
+    return {
+      startDate: customRange.start,
+      endDate: customRange.end,
+      title: `${startD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${endD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+      subtitle: `Custom Filter • ${diffDays} Days Range`,
+      isCurrent: customRange.end === todayStr,
+    };
+  }, [filterMode, selectedDay, weekAnchor, monthAnchor, yearAnchor, customRange, todayStr]);
+
+  const inFlightRef = React.useRef(false);
   const loadData = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
-      const latest = await sleepService.getLatest();
-      setLatestSleep(latest);
-      const history = await sleepService.getWeeklyHistory();
-      setWeeklyHistory(history);
+      if (filterMode === 'DAY') {
+        const history = await sleepService.getHistory({
+          startDate: activePeriod.startDate,
+          endDate: activePeriod.endDate,
+        });
+        setLatestSleep(history.length > 0 ? history[0] : null);
+        setRangeSummary(null);
+      } else {
+        const rngRes = await sleepService.getRangeSummary(activePeriod.startDate, activePeriod.endDate);
+        setRangeSummary(rngRes);
+        setLatestSleep(null);
+      }
     } catch (err: any) {
       console.warn('Failed to load sleep data:', err.message);
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [filterMode, activePeriod.startDate, activePeriod.endDate]);
 
   useEffect(() => {
     loadData();
@@ -84,8 +234,69 @@ export default function SleepTrackerScreen() {
     loadData();
   };
 
+  // Stepper handlers (< and >)
+  const handlePrevPeriod = () => {
+    if (filterMode === 'DAY') {
+      const cur = parseDateString(selectedDay);
+      cur.setDate(cur.getDate() - 1);
+      setSelectedDay(toDateString(cur));
+    } else if (filterMode === 'WEEK') {
+      const cur = parseDateString(weekAnchor);
+      cur.setDate(cur.getDate() - 7);
+      setWeekAnchor(toDateString(cur));
+    } else if (filterMode === 'MONTH') {
+      const [y, m] = monthAnchor.split('-').map(Number);
+      const cur = new Date(y, m - 2, 1);
+      setMonthAnchor(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`);
+    } else if (filterMode === 'YEAR') {
+      setYearAnchor((prev) => prev - 1);
+    }
+  };
+
+  const handleNextPeriod = () => {
+    if (activePeriod.isCurrent) return;
+
+    if (filterMode === 'DAY') {
+      const cur = parseDateString(selectedDay);
+      cur.setDate(cur.getDate() + 1);
+      const nextStr = toDateString(cur);
+      if (nextStr <= todayStr) setSelectedDay(nextStr);
+    } else if (filterMode === 'WEEK') {
+      const cur = parseDateString(weekAnchor);
+      cur.setDate(cur.getDate() + 7);
+      setWeekAnchor(toDateString(cur));
+    } else if (filterMode === 'MONTH') {
+      const [y, m] = monthAnchor.split('-').map(Number);
+      const cur = new Date(y, m, 1);
+      const nextYM = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
+      if (nextYM <= todayStr.substring(0, 7)) setMonthAnchor(nextYM);
+    } else if (filterMode === 'YEAR') {
+      if (yearAnchor < new Date().getFullYear()) setYearAnchor((prev) => prev + 1);
+    }
+  };
+
+  const handleGoToday = () => {
+    setSelectedDay(todayStr);
+    setWeekAnchor(todayStr);
+    setMonthAnchor(todayStr.substring(0, 7));
+    setYearAnchor(new Date().getFullYear());
+  };
+
+  const handleApplyCalendar = (start: string, end: string, mode: 'DAY' | 'WEEK' | 'CUSTOM') => {
+    if (mode === 'DAY') {
+      setFilterMode('DAY');
+      setSelectedDay(start);
+    } else if (mode === 'WEEK') {
+      setFilterMode('WEEK');
+      setWeekAnchor(start);
+    } else {
+      setFilterMode('CUSTOM');
+      setCustomRange({ start, end });
+    }
+    setCalendarModalVisible(false);
+  };
+
   const handleLogSleep = async () => {
-    // Validate HH:mm formats
     const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
     if (!timeRegex.test(bedtimeStr) || !timeRegex.test(wakeTimeStr)) {
       Alert.alert('Invalid Time', 'Please enter valid times in 24-hour HH:mm format (e.g. 22:30)');
@@ -94,18 +305,16 @@ export default function SleepTrackerScreen() {
 
     try {
       setSubmitting(true);
-      const today = new Date();
+      const targetDate = parseDateString(activePeriod.startDate);
       const [bHour, bMin] = bedtimeStr.split(':').map(Number);
       const [wHour, wMin] = wakeTimeStr.split(':').map(Number);
 
-      // Bedtime is typically yesterday evening if wake time is morning
-      const bedtime = new Date(today);
+      const bedtime = new Date(targetDate);
       bedtime.setHours(bHour, bMin, 0, 0);
 
-      const wakeTime = new Date(today);
+      const wakeTime = new Date(targetDate);
       wakeTime.setHours(wHour, wMin, 0, 0);
 
-      // If wake time is earlier than bedtime, bedtime was previous day
       if (wakeTime.getTime() <= bedtime.getTime()) {
         bedtime.setDate(bedtime.getDate() - 1);
       }
@@ -145,18 +354,28 @@ export default function SleepTrackerScreen() {
     ]);
   };
 
+  // Metrics computation
+  const isDayMode = filterMode === 'DAY';
   const durationHours = latestSleep?.durationMinutes
     ? (latestSleep.durationMinutes / 60).toFixed(1)
     : '0.0';
+  const totalHours = isDayMode ? parseFloat(durationHours) : (rangeSummary?.totalHours || 0);
+  const avgHours = isDayMode ? parseFloat(durationHours) : (rangeSummary?.avgDurationHours || 0);
+  const optimalNights = isDayMode ? (parseFloat(durationHours) >= 7 ? 1 : 0) : (rangeSummary?.optimalGoalNights || 0);
+  const adherencePct = isDayMode ? (parseFloat(durationHours) >= 7 ? 100 : Math.round((parseFloat(durationHours) / 8) * 100)) : (rangeSummary?.adherencePercentage || 0);
 
   const formatTime = (isoString?: string) => {
     if (!isoString) return '--:--';
     return new Date(isoString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  const sleepRecordsList: SleepRecordDto[] = isDayMode
+    ? (latestSleep ? [latestSleep] : [])
+    : (rangeSummary?.records || []);
+
   return (
     <View style={styles.container}>
-      <AppHeader title="Sleep Tracker" />
+      <AppHeader title="Sleep Tracker" showBack onBackPress={() => router.back()} />
 
       <ScrollView
         style={styles.scroll}
@@ -164,87 +383,103 @@ export default function SleepTrackerScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[SLEEP_COLOR]} />}
         showsVerticalScrollIndicator={false}
       >
-        {/* Main Sleep Summary Card */}
+        {/* Unified Period Filter Bar */}
+        <PeriodFilterBar
+          activeMode={filterMode}
+          onModeChange={(mode) => {
+            setFilterMode(mode);
+            if (mode === 'CUSTOM') setCalendarModalVisible(true);
+          }}
+          title={activePeriod.title}
+          subtitle={activePeriod.subtitle}
+          isCurrentPeriod={activePeriod.isCurrent}
+          onPrev={handlePrevPeriod}
+          onNext={handleNextPeriod}
+          onOpenCalendar={() => setCalendarModalVisible(true)}
+          onGoToday={handleGoToday}
+          accentColor={SLEEP_COLOR}
+          accentLightBg={SLEEP_BG_LIGHT}
+          accentBorder={SLEEP_BORDER}
+        />
+
+        {/* Main Sleep Summary Hero Card */}
         <View style={styles.heroCard}>
           <View style={styles.heroHeader}>
             <View style={styles.heroIconBox}>
               <Moon size={24} color={SLEEP_COLOR} />
             </View>
             <View style={styles.heroHeaderText}>
-              <Text style={styles.heroTitle}>Last Night's Sleep</Text>
-              <Text style={styles.heroSubtitle}>
-                {latestSleep?.date || 'No recent session recorded'}
+              <Text style={styles.heroTitle}>{isDayMode ? `${activePeriod.title}'s Sleep` : 'Period Sleep'}</Text>
+              <Text style={styles.heroSubtitle}>Goal: 8.0 hrs / night</Text>
+            </View>
+            <View style={[styles.qualityBadge, { backgroundColor: SLEEP_BG_LIGHT }]}>
+              <Text style={styles.qualityBadgeText}>
+                {isDayMode
+                  ? (latestSleep?.sleepQuality || latestSleep?.quality || 'No Log').toString().replace('_', ' ')
+                  : `${adherencePct}% Goal Met`}
               </Text>
             </View>
-            {latestSleep?.quality && (
-              <View style={[styles.qualityBadge, { backgroundColor: SLEEP_BG_LIGHT }]}>
-                <Text style={styles.qualityBadgeText}>{latestSleep.quality.replace('_', ' ')}</Text>
-              </View>
-            )}
           </View>
 
           {/* Big Duration */}
           <View style={styles.bigNumberRow}>
-            <Text style={styles.currentNumber}>{durationHours}</Text>
-            <Text style={styles.totalUnitText}> hours slept</Text>
+            <Text style={styles.currentNumber}>{isDayMode ? durationHours : avgHours.toFixed(1)}</Text>
+            <Text style={styles.totalUnitText}>{isDayMode ? ' hours slept' : ' hrs/night avg'}</Text>
           </View>
 
-          {/* Bedtime & Wakeup times */}
+          {/* Bedtime, Wake, and Adherence stats */}
           <View style={styles.statsRow}>
             <View style={styles.statBox}>
-              <Text style={styles.statLabel}>Bedtime</Text>
-              <Text style={styles.statValue}>{formatTime(latestSleep?.bedtime)}</Text>
+              <Text style={styles.statLabel}>{isDayMode ? 'Bedtime' : 'Total Hours'}</Text>
+              <Text style={styles.statValue}>
+                {isDayMode ? formatTime(latestSleep?.bedtime) : `${totalHours.toFixed(1)} hrs`}
+              </Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statBox}>
-              <Text style={styles.statLabel}>Wake Time</Text>
-              <Text style={styles.statValue}>{formatTime(latestSleep?.wakeTime)}</Text>
+              <Text style={styles.statLabel}>{isDayMode ? 'Wake Time' : 'Optimal (8h) Nights'}</Text>
+              <Text style={styles.statValue}>
+                {isDayMode
+                  ? formatTime(latestSleep?.wakeTime)
+                  : `${optimalNights} / ${rangeSummary?.daysCount || 1}d`}
+              </Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statBox}>
-              <Text style={styles.statLabel}>Efficiency</Text>
-              <Text style={[styles.statValue, { color: '#16A34A' }]}>
-                {latestSleep?.efficiencyScore ? `${latestSleep.efficiencyScore}%` : '85%'}
+              <Text style={styles.statLabel}>Adherence</Text>
+              <Text style={[styles.statValue, { color: adherencePct >= 80 ? '#16A34A' : SLEEP_COLOR }]}>
+                {adherencePct}%
               </Text>
             </View>
           </View>
         </View>
 
-        {/* Action Button */}
+        {/* Action Button: Log New Sleep Session */}
         <TouchableOpacity
           style={styles.logActionBtn}
           onPress={() => setShowLogModal(true)}
           activeOpacity={0.8}
         >
           <Plus size={20} color="#FFFFFF" />
-          <Text style={styles.logActionBtnText}>Log New Sleep Session</Text>
+          <Text style={styles.logActionBtnText}>
+            {isDayMode ? `Log Sleep for ${activePeriod.title}` : 'Log New Sleep Session'}
+          </Text>
         </TouchableOpacity>
 
-        {/* Weekly Sleep Bar Chart */}
-        {weeklyHistory.length > 0 && (
+        {/* Sleep Quality Breakdown (For Week/Month/Year/Custom) */}
+        {!isDayMode && rangeSummary?.qualityDistribution && (
           <View style={styles.chartCard}>
             <View style={styles.chartHeader}>
-              <TrendingUp size={18} color={SLEEP_COLOR} />
-              <Text style={styles.chartTitle}>7-Day Sleep Duration</Text>
+              <PieChart size={18} color={SLEEP_COLOR} />
+              <Text style={styles.chartTitle}>Sleep Quality Distribution</Text>
             </View>
-            <View style={styles.chartContainer}>
-              {weeklyHistory.map((item, idx) => {
-                const hours = item.durationMinutes ? item.durationMinutes / 60 : 0;
-                const barHeightPct = Math.min(100, Math.round((hours / 10) * 100));
-                const dayLabel = item.date ? new Date(item.date).toLocaleDateString('en-US', { weekday: 'narrow' }) : `${idx + 1}`;
+            <View style={styles.qualGrid}>
+              {QUALITY_OPTIONS.map((opt) => {
+                const count = rangeSummary.qualityDistribution[opt.quality] || 0;
                 return (
-                  <View key={item.id || idx} style={styles.barCol}>
-                    <Text style={styles.barValueText}>{hours > 0 ? `${hours.toFixed(1)}h` : ''}</Text>
-                    <View style={styles.barTrack}>
-                      <View
-                        style={[
-                          styles.barFill,
-                          { height: `${Math.max(10, barHeightPct)}%` },
-                          hours >= 7 && { backgroundColor: '#16A34A' },
-                        ]}
-                      />
-                    </View>
-                    <Text style={styles.barDayText}>{dayLabel}</Text>
+                  <View key={opt.quality} style={styles.qualItem}>
+                    <Text style={styles.qualLabel}>{opt.label}</Text>
+                    <Text style={[styles.qualValue, { color: opt.color }]}>{count} nights</Text>
                   </View>
                 );
               })}
@@ -252,24 +487,60 @@ export default function SleepTrackerScreen() {
           </View>
         )}
 
-        {/* Recent Sleep Logs */}
+        {/* Daily Sleep Duration Chart (For Week/Month/Year/Custom) */}
+        {!isDayMode && rangeSummary?.dailyBreakdown && rangeSummary.dailyBreakdown.length > 0 && (
+          <View style={styles.chartCard}>
+            <View style={styles.chartHeader}>
+              <TrendingUp size={18} color={SLEEP_COLOR} />
+              <Text style={styles.chartTitle}>Daily Sleep Duration</Text>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chartScroll}>
+              <View style={styles.chartContainer}>
+                {rangeSummary.dailyBreakdown.map((item, idx) => {
+                  const hours = item.durationHours || 0;
+                  const barHeightPct = Math.min(100, Math.round((hours / 10) * 100));
+                  return (
+                    <View key={item.date || idx} style={styles.barCol}>
+                      <Text style={styles.barValueText}>{hours > 0 ? `${hours.toFixed(1)}h` : ''}</Text>
+                      <View style={styles.barTrack}>
+                        <View
+                          style={[
+                            styles.barFill,
+                            { height: `${Math.max(8, barHeightPct)}%` },
+                            item.goalReached && { backgroundColor: '#16A34A' },
+                          ]}
+                        />
+                      </View>
+                      <Text style={styles.barDayText}>{item.label}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          </View>
+        )}
+
+        {/* Sleep History Section */}
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Sleep History</Text>
+          <Text style={styles.sectionTitle}>
+            {isDayMode ? `${activePeriod.title}'s Session` : 'Sleep History'} ({sleepRecordsList.length})
+          </Text>
         </View>
 
         {loading ? (
           <ActivityIndicator color={SLEEP_COLOR} style={{ marginVertical: 20 }} />
-        ) : weeklyHistory.length === 0 ? (
+        ) : sleepRecordsList.length === 0 ? (
           <View style={styles.emptyState}>
             <Moon size={36} color={colors.secondaryText} style={{ opacity: 0.5 }} />
-            <Text style={styles.emptyTitle}>No sleep history logged yet</Text>
-            <Text style={styles.emptySubtitle}>Track bedtime and wake up times to unlock restorative sleep analytics.</Text>
+            <Text style={styles.emptyTitle}>No sleep sessions recorded</Text>
+            <Text style={styles.emptySubtitle}>Tap the button above to log your sleep duration and quality</Text>
           </View>
         ) : (
           <View style={styles.historyList}>
-            {weeklyHistory.map((rec) => {
-              const hours = (rec.durationMinutes / 60).toFixed(1);
-              const recId = rec._id || rec.id || Math.random().toString();
+            {sleepRecordsList.map((item) => {
+              const recId = item._id || item.id || Math.random().toString();
+              const hrs = item.durationMinutes ? (item.durationMinutes / 60).toFixed(1) : '0.0';
+              const qual = (item.sleepQuality || item.quality || 'GOOD').toString().replace('_', ' ');
               return (
                 <View key={recId} style={styles.historyItem}>
                   <View style={styles.historyLeft}>
@@ -277,19 +548,20 @@ export default function SleepTrackerScreen() {
                       <Moon size={18} color={SLEEP_COLOR} />
                     </View>
                     <View>
-                      <Text style={styles.historyDate}>{rec.dateString || rec.date}</Text>
+                      <Text style={styles.historyDate}>{item.dateString || item.date || 'Sleep Record'}</Text>
                       <Text style={styles.historyTimes}>
-                        {formatTime(rec.bedtime)} – {formatTime(rec.wakeTime)}
+                        {formatTime(item.bedtime)} – {formatTime(item.wakeTime)}
                       </Text>
+                      {item.notes ? <Text style={styles.historyNotes}>"{item.notes}"</Text> : null}
                     </View>
                   </View>
                   <View style={styles.historyRight}>
-                    <View style={styles.durationBadge}>
-                      <Text style={styles.durationBadgeText}>{hours} hrs</Text>
-                    </View>
+                    <Text style={styles.historyHours}>{hrs} hrs</Text>
+                    <Text style={styles.historyQuality}>{qual}</Text>
                     <TouchableOpacity
                       onPress={() => handleDelete(recId)}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={styles.deleteBtn}
                     >
                       <Trash2 size={16} color="#EF4444" />
                     </TouchableOpacity>
@@ -300,6 +572,18 @@ export default function SleepTrackerScreen() {
           </View>
         )}
       </ScrollView>
+
+      {/* Interactive Calendar Modal */}
+      <InteractiveCalendarModal
+        visible={calendarModalVisible}
+        onClose={() => setCalendarModalVisible(false)}
+        initialStartDate={activePeriod.startDate}
+        initialEndDate={activePeriod.endDate}
+        initialMode={filterMode === 'DAY' ? 'DAY' : filterMode === 'WEEK' ? 'WEEK' : 'RANGE'}
+        onApply={handleApplyCalendar}
+        accentColor={SLEEP_COLOR}
+        accentLightBg={SLEEP_BG_LIGHT}
+      />
 
       {/* Log Sleep Modal */}
       <Modal visible={showLogModal} transparent animationType="slide">
@@ -313,46 +597,46 @@ export default function SleepTrackerScreen() {
             </View>
 
             <View style={styles.timeInputsRow}>
-              <View style={styles.timeInputCol}>
+              <View style={styles.timeCol}>
                 <Text style={styles.inputLabel}>Bedtime (HH:mm)</Text>
                 <TextInput
                   style={styles.timeInput}
-                  placeholder="22:30"
                   value={bedtimeStr}
                   onChangeText={setBedtimeStr}
-                  placeholderTextColor={colors.secondaryText}
+                  placeholder="22:30"
                   maxLength={5}
                 />
               </View>
-              <View style={styles.timeInputCol}>
+              <View style={styles.timeCol}>
                 <Text style={styles.inputLabel}>Wake Time (HH:mm)</Text>
                 <TextInput
                   style={styles.timeInput}
-                  placeholder="06:30"
                   value={wakeTimeStr}
                   onChangeText={setWakeTimeStr}
-                  placeholderTextColor={colors.secondaryText}
+                  placeholder="06:30"
                   maxLength={5}
                 />
               </View>
             </View>
 
-            {/* Quality Picker */}
             <Text style={styles.inputLabel}>Sleep Quality</Text>
             <View style={styles.qualityGrid}>
               {QUALITY_OPTIONS.map((q) => (
                 <TouchableOpacity
                   key={q.quality}
                   style={[
-                    styles.qualityOption,
-                    selectedQuality === q.quality && styles.qualityOptionActive,
+                    styles.qualityPill,
+                    selectedQuality === q.quality && {
+                      backgroundColor: SLEEP_BG_LIGHT,
+                      borderColor: SLEEP_COLOR,
+                    },
                   ]}
                   onPress={() => setSelectedQuality(q.quality)}
                 >
                   <Text
                     style={[
-                      styles.qualityOptionText,
-                      selectedQuality === q.quality && styles.qualityOptionTextActive,
+                      styles.qualityPillText,
+                      selectedQuality === q.quality && { color: SLEEP_COLOR, fontWeight: '700' },
                     ]}
                   >
                     {q.label}
@@ -361,25 +645,20 @@ export default function SleepTrackerScreen() {
               ))}
             </View>
 
-            {/* Notes */}
             <Text style={styles.inputLabel}>Notes (Optional)</Text>
             <TextInput
-              style={[styles.timeInput, { height: 44, marginBottom: 20 }]}
-              placeholder="e.g. Woke up refreshed, slight headache"
+              style={[styles.timeInput, { height: 60, textAlignVertical: 'top', paddingTop: 8 }]}
               value={sleepNotes}
               onChangeText={setSleepNotes}
-              placeholderTextColor={colors.secondaryText}
+              placeholder="e.g. Woke up refreshed, drank chamomile tea"
+              multiline
             />
 
-            <TouchableOpacity
-              style={styles.submitBtn}
-              onPress={handleLogSleep}
-              disabled={submitting}
-            >
+            <TouchableOpacity style={styles.submitBtn} onPress={handleLogSleep} disabled={submitting}>
               {submitting ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <Text style={styles.submitBtnText}>Save Sleep Record</Text>
+                <Text style={styles.submitBtnText}>Save Sleep Session</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -408,10 +687,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: SLEEP_BORDER,
     marginBottom: 16,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8 },
-      android: { elevation: 2 },
-    }),
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
   },
   heroHeader: {
     flexDirection: 'row',
@@ -419,8 +699,8 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   heroIconBox: {
-    width: 46,
-    height: 46,
+    width: 44,
+    height: 44,
     borderRadius: 12,
     backgroundColor: SLEEP_BG_LIGHT,
     justifyContent: 'center',
@@ -431,7 +711,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   heroTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
     color: colors.primaryText,
   },
@@ -441,9 +721,9 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   qualityBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: SLEEP_BORDER,
   },
@@ -451,11 +731,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: SLEEP_COLOR,
+    textTransform: 'capitalize',
   },
   bigNumberRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   currentNumber: {
     fontSize: 34,
@@ -463,28 +744,25 @@ const styles = StyleSheet.create({
     color: colors.primaryText,
   },
   totalUnitText: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
     color: colors.secondaryText,
+    fontWeight: '500',
+    marginLeft: 4,
   },
   statsRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 14,
-    padding: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
   },
   statBox: {
     flex: 1,
     alignItems: 'center',
   },
-  statDivider: {
-    width: 1,
-    backgroundColor: '#E2E8F0',
-    marginVertical: 4,
-  },
   statLabel: {
-    fontSize: 11,
+    fontSize: 12,
     color: colors.secondaryText,
     marginBottom: 2,
   },
@@ -493,15 +771,21 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.primaryText,
   },
+  statDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#F1F5F9',
+  },
   logActionBtn: {
     flexDirection: 'row',
+    backgroundColor: SLEEP_COLOR,
+    borderRadius: 14,
+    height: 48,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: SLEEP_COLOR,
-    height: 48,
-    borderRadius: 14,
     marginBottom: 20,
+    elevation: 2,
   },
   logActionBtnText: {
     color: '#FFFFFF',
@@ -527,28 +811,53 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.primaryText,
   },
-  chartContainer: {
+  qualGrid: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    height: 120,
-    paddingTop: 10,
+    flexWrap: 'wrap',
+    gap: 10,
   },
-  barCol: {
+  qualItem: {
     flex: 1,
-    alignItems: 'center',
-    height: '100%',
-    justifyContent: 'flex-end',
+    minWidth: '45%',
+    backgroundColor: SLEEP_BG_LIGHT,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: SLEEP_BORDER,
   },
-  barValueText: {
-    fontSize: 10,
-    fontWeight: '600',
+  qualLabel: {
+    fontSize: 12,
     color: colors.secondaryText,
     marginBottom: 4,
   },
+  qualValue: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  chartScroll: {
+    paddingRight: 10,
+  },
+  chartContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    height: 140,
+    gap: 12,
+    paddingTop: 20,
+    paddingBottom: 6,
+  },
+  barCol: {
+    alignItems: 'center',
+    minWidth: 32,
+  },
+  barValueText: {
+    fontSize: 10,
+    color: colors.secondaryText,
+    marginBottom: 4,
+    fontWeight: '600',
+  },
   barTrack: {
     width: 14,
-    height: 80,
+    height: 90,
     backgroundColor: '#F1F5F9',
     borderRadius: 7,
     justifyContent: 'flex-end',
@@ -562,8 +871,8 @@ const styles = StyleSheet.create({
   barDayText: {
     fontSize: 11,
     color: colors.secondaryText,
-    marginTop: 6,
     fontWeight: '600',
+    marginTop: 6,
   },
   sectionHeader: {
     marginBottom: 12,
@@ -573,16 +882,37 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.primaryText,
   },
+  emptyState: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 30,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.primaryText,
+    marginTop: 12,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    color: colors.secondaryText,
+    marginTop: 4,
+    textAlign: 'center',
+  },
   historyList: {
     gap: 10,
+    marginBottom: 20,
   },
   historyItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    padding: 14,
     borderRadius: 14,
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
@@ -590,18 +920,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    flex: 1,
   },
   historyIconBox: {
     width: 38,
     height: 38,
-    borderRadius: 10,
+    borderRadius: 12,
     backgroundColor: SLEEP_BG_LIGHT,
     justifyContent: 'center',
     alignItems: 'center',
   },
   historyDate: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
     color: colors.primaryText,
   },
   historyTimes: {
@@ -609,41 +940,29 @@ const styles = StyleSheet.create({
     color: colors.secondaryText,
     marginTop: 2,
   },
+  historyNotes: {
+    fontSize: 12,
+    color: colors.secondaryText,
+    fontStyle: 'italic',
+    marginTop: 2,
+  },
   historyRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+    alignItems: 'flex-end',
+    gap: 4,
   },
-  durationBadge: {
-    backgroundColor: SLEEP_BG_LIGHT,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
-  },
-  durationBadgeText: {
-    fontSize: 13,
+  historyHours: {
+    fontSize: 15,
     fontWeight: '700',
     color: SLEEP_COLOR,
   },
-  emptyState: {
-    alignItems: 'center',
-    padding: 30,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  emptyTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.primaryText,
-    marginTop: 8,
-  },
-  emptySubtitle: {
-    fontSize: 12,
+  historyQuality: {
+    fontSize: 11,
     color: colors.secondaryText,
-    marginTop: 4,
-    textAlign: 'center',
+    textTransform: 'capitalize',
+  },
+  deleteBtn: {
+    padding: 2,
+    marginTop: 2,
   },
   modalOverlay: {
     flex: 1,
@@ -654,7 +973,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 24,
+    padding: 20,
+    paddingBottom: 36,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -672,57 +992,51 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 16,
   },
-  timeInputCol: {
+  timeCol: {
     flex: 1,
   },
   inputLabel: {
     fontSize: 13,
     fontWeight: '600',
-    color: colors.secondaryText,
+    color: colors.primaryText,
     marginBottom: 8,
   },
   timeInput: {
     height: 48,
-    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#CBD5E1',
-    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
     paddingHorizontal: 14,
     fontSize: 15,
     color: colors.primaryText,
+    marginBottom: 16,
   },
   qualityGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
     marginBottom: 16,
   },
-  qualityOption: {
-    flex: 1,
-    paddingVertical: 10,
+  qualityPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
     borderWidth: 1,
     borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
   },
-  qualityOptionActive: {
-    backgroundColor: SLEEP_BG_LIGHT,
-    borderColor: SLEEP_COLOR,
-  },
-  qualityOptionText: {
-    fontSize: 12,
-    fontWeight: '600',
+  qualityPillText: {
+    fontSize: 13,
     color: colors.secondaryText,
-  },
-  qualityOptionTextActive: {
-    color: SLEEP_COLOR,
+    fontWeight: '500',
   },
   submitBtn: {
-    backgroundColor: colors.primary,
-    height: 50,
-    borderRadius: 14,
+    backgroundColor: SLEEP_COLOR,
+    height: 48,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
+    marginTop: 8,
   },
   submitBtnText: {
     color: '#FFFFFF',

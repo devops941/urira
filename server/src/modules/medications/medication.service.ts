@@ -157,5 +157,104 @@ export class MedicationService {
       history,
     };
   }
+
+  async getRangeSummary(userId: string, startDate?: string, endDate?: string) {
+    const today = this.getTodayString();
+    let startStr = startDate || today;
+    let endStr = endDate || startStr;
+
+    if (startStr > endStr) {
+      const tmp = startStr;
+      startStr = endStr;
+      endStr = tmp;
+    }
+
+    const history = await this.repo.getAdherenceHistory(userId, startStr, endStr);
+    const activeMeds = await this.repo.findActiveByUser(userId);
+
+    const totalDoses = history.length;
+    const takenCount = history.filter((h) => h.status === DoseStatus.TAKEN).length;
+    const skippedCount = history.filter((h) => h.status === DoseStatus.SKIPPED).length;
+    const missedCount = history.filter((h) => h.status === DoseStatus.MISSED).length;
+    const adherenceRate = totalDoses > 0 ? Math.round((takenCount / totalDoses) * 100) : 100;
+
+    const startObj = new Date(startStr + 'T00:00:00Z');
+    const endObj = new Date(endStr + 'T00:00:00Z');
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const diffDays = Math.max(1, Math.round((endObj.getTime() - startObj.getTime()) / msPerDay) + 1);
+
+    const dayMap = new Map<string, { total: number; taken: number }>();
+    for (const h of history) {
+      const cur = dayMap.get(h.dateString) || { total: 0, taken: 0 };
+      cur.total += 1;
+      if (h.status === DoseStatus.TAKEN) cur.taken += 1;
+      dayMap.set(h.dateString, cur);
+    }
+
+    const dailyBreakdown: Array<{
+      date: string;
+      label: string;
+      totalScheduled: number;
+      takenCount: number;
+      adherenceRate: number;
+    }> = [];
+
+    if (diffDays <= 35) {
+      const cur = new Date(startObj);
+      while (cur <= endObj) {
+        const dStr = cur.toISOString().split('T')[0];
+        const stat = dayMap.get(dStr) || { total: 0, taken: 0 };
+        const rate = stat.total > 0 ? Math.round((stat.taken / stat.total) * 100) : 100;
+        const label = cur.toLocaleDateString('en-US', { weekday: 'narrow' });
+        dailyBreakdown.push({
+          date: dStr,
+          label,
+          totalScheduled: stat.total,
+          takenCount: stat.taken,
+          adherenceRate: rate,
+        });
+        cur.setDate(cur.getDate() + 1);
+      }
+    } else {
+      const monthMap = new Map<string, { total: number; taken: number }>();
+      for (const [dStr, stat] of dayMap.entries()) {
+        const ym = dStr.substring(0, 7);
+        const curM = monthMap.get(ym) || { total: 0, taken: 0 };
+        curM.total += stat.total;
+        curM.taken += stat.taken;
+        monthMap.set(ym, curM);
+      }
+
+      const startYear = parseInt(startStr.substring(0, 4), 10);
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      for (let m = 1; m <= 12; m++) {
+        const mPad = m < 10 ? `0${m}` : `${m}`;
+        const ym = `${startYear}-${mPad}`;
+        const curM = monthMap.get(ym) || { total: 0, taken: 0 };
+        const rate = curM.total > 0 ? Math.round((curM.taken / curM.total) * 100) : 100;
+        dailyBreakdown.push({
+          date: `${ym}-01`,
+          label: monthNames[m - 1],
+          totalScheduled: curM.total,
+          takenCount: curM.taken,
+          adherenceRate: rate,
+        });
+      }
+    }
+
+    return {
+      startDate: startStr,
+      endDate: endStr,
+      daysCount: diffDays,
+      activeMedicationsCount: activeMeds.length,
+      totalDoses,
+      takenCount,
+      skippedCount,
+      missedCount,
+      adherenceRate,
+      dailyBreakdown,
+      history,
+    };
+  }
 }
 

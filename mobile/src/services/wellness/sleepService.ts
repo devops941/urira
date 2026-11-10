@@ -2,6 +2,7 @@ import { apiClient } from '../api/axiosInstance';
 import {
   ISleepLatestResponse,
   ISleepRecord,
+  ISleepRangeSummary,
   SleepQuality,
 } from '../../types/wellness';
 
@@ -28,6 +29,11 @@ export const sleepService = {
   async getLatest(): Promise<ISleepRecord | null> {
     const res = await apiClient.get('/sleep/latest');
     return res.data.data?.latest || null;
+  },
+
+  async getRangeSummary(startDate: string, endDate: string): Promise<ISleepRangeSummary> {
+    const res = await apiClient.get(`/sleep/range?startDate=${startDate}&endDate=${endDate}`);
+    return res.data.data;
   },
 
   async getWeeklySummary(): Promise<any> {

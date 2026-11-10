@@ -46,6 +46,7 @@ export default function WalkingTrackerScreen() {
   const [calories, setCalories] = useState(0);
   const [goalSteps, setGoalSteps] = useState(7000);
   const [isCadenceLocked, setIsCadenceLocked] = useState(false);
+  const [bufferedSteps, setBufferedSteps] = useState(0);
   const [cadenceSpm, setCadenceSpm] = useState(0);
   const [speedKmh, setSpeedKmh] = useState(0);
 
@@ -145,6 +146,9 @@ export default function WalkingTrackerScreen() {
       if (event.cadenceLocked !== undefined) {
         setIsCadenceLocked(event.cadenceLocked);
       }
+      if (event.bufferedSteps !== undefined) {
+        setBufferedSteps(event.bufferedSteps);
+      }
       if (event.cadenceSpm !== undefined) {
         setCadenceSpm(event.cadenceSpm);
       }
@@ -170,6 +174,7 @@ export default function WalkingTrackerScreen() {
       setDurationSeconds(0);
       setCalories(0);
       setIsCadenceLocked(false);
+      setBufferedSteps(0);
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to start walking workout');
     }
@@ -298,7 +303,9 @@ export default function WalkingTrackerScreen() {
             {status === 'ACTIVE'
               ? isCadenceLocked
                 ? 'Walking Verified • Cadence Locked'
-                : 'Walk 3-4 steps to lock cadence'
+                : bufferedSteps > 0
+                ? `Walk 4 steps to verify cadence (${bufferedSteps}/4)`
+                : 'Walk 4 continuous steps to lock cadence'
               : status === 'PAUSED'
               ? 'Workout Paused'
               : 'Ready to Walk'}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,29 +10,27 @@ import {
   Alert,
   ActivityIndicator,
   RefreshControl,
-  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import {
   Droplets,
   Plus,
   Trash2,
-  Calendar,
   Clock,
-  CupSoda,
   Coffee,
-  Sparkles,
   TrendingUp,
   X,
-  CheckCircle2,
-  AlertCircle,
+  PieChart,
 } from 'lucide-react-native';
 import { AppHeader } from '../../../components/common/AppHeader';
+import { PeriodFilterBar, FilterMode } from '../../../components/common/PeriodFilterBar';
+import { InteractiveCalendarModal } from '../../../components/common/InteractiveCalendarModal';
 import { waterService } from '../../../services/wellness/waterService';
 import { profileService } from '../../../services/health/profileService';
 import {
   WaterLogDto,
   DailyWaterSummaryDto,
+  IWaterRangeSummary,
   BeverageType,
 } from '../../../types/wellness';
 import { HealthProfileDto } from '../../../types/health';
@@ -58,13 +56,68 @@ const BEVERAGE_TYPES: { type: BeverageType; label: string }[] = [
   { type: BeverageType.OTHER, label: 'Other' },
 ];
 
+// Helper: Format Date object to local YYYY-MM-DD
+const toDateString = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const getTodayString = (): string => toDateString(new Date());
+
+const parseDateString = (str: string): Date => {
+  const [y, m, d] = str.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
+
+const getWeekRange = (dateStr: string) => {
+  const date = parseDateString(dateStr);
+  const dayOfWeek = date.getDay();
+  const diffToMon = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(date);
+  monday.setDate(date.getDate() + diffToMon);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  return { start: toDateString(monday), end: toDateString(sunday) };
+};
+
+const getMonthRange = (yearMonthStr: string) => {
+  const [y, m] = yearMonthStr.split('-').map(Number);
+  const start = `${y}-${String(m).padStart(2, '0')}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const end = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  return { start, end };
+};
+
 export default function WaterTrackerScreen() {
   const router = useRouter();
+  const todayStr = useMemo(() => getTodayString(), []);
+
+  // Filter Mode & Navigation State
+  const [filterMode, setFilterMode] = useState<FilterMode>('DAY');
+  const [selectedDay, setSelectedDay] = useState<string>(todayStr);
+  const [weekAnchor, setWeekAnchor] = useState<string>(todayStr);
+  const [monthAnchor, setMonthAnchor] = useState<string>(todayStr.substring(0, 7));
+  const [yearAnchor, setYearAnchor] = useState<number>(new Date().getFullYear());
+  const [customRange, setCustomRange] = useState<{ start: string; end: string }>({
+    start: (() => {
+      const d = new Date();
+      d.setDate(d.getDate() - 6);
+      return toDateString(d);
+    })(),
+    end: todayStr,
+  });
+
+  // Calendar Modal State
+  const [calendarModalVisible, setCalendarModalVisible] = useState(false);
+
+  // Data States
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [summary, setSummary] = useState<DailyWaterSummaryDto | null>(null);
+  const [rangeSummary, setRangeSummary] = useState<IWaterRangeSummary | null>(null);
   const [profile, setProfile] = useState<HealthProfileDto | null>(null);
-  const [weeklyHistory, setWeeklyHistory] = useState<any[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
   // Custom Add Modal State
@@ -73,23 +126,118 @@ export default function WaterTrackerScreen() {
   const [selectedType, setSelectedType] = useState<BeverageType>(BeverageType.WATER);
   const [beverageName, setBeverageName] = useState('');
 
+  // Active Period Computation
+  const activePeriod = useMemo(() => {
+    if (filterMode === 'DAY') {
+      const isToday = selectedDay === todayStr;
+      const isYesterday = (() => {
+        const y = new Date();
+        y.setDate(y.getDate() - 1);
+        return selectedDay === toDateString(y);
+      })();
+
+      const d = parseDateString(selectedDay);
+      let title = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      if (isToday) title = 'Today';
+      else if (isYesterday) title = 'Yesterday';
+
+      return {
+        startDate: selectedDay,
+        endDate: selectedDay,
+        title,
+        subtitle: d.toLocaleDateString('en-US', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }),
+        isCurrent: isToday,
+      };
+    }
+
+    if (filterMode === 'WEEK') {
+      const { start, end } = getWeekRange(weekAnchor);
+      const isCurrentWeek = getWeekRange(todayStr).start === start;
+      const startD = parseDateString(start);
+      const endD = parseDateString(end);
+      const title = isCurrentWeek
+        ? 'This Week'
+        : `${startD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${endD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+      return {
+        startDate: start,
+        endDate: end,
+        title,
+        subtitle: `${startD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} to ${endD.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+        isCurrent: isCurrentWeek,
+      };
+    }
+
+    if (filterMode === 'MONTH') {
+      const { start, end } = getMonthRange(monthAnchor);
+      const isCurrentMonth = todayStr.substring(0, 7) === monthAnchor;
+      const [y, m] = monthAnchor.split('-').map(Number);
+      const monthDate = new Date(y, m - 1, 1);
+      const title = monthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      return {
+        startDate: start,
+        endDate: end,
+        title,
+        subtitle: isCurrentMonth ? 'Current Month' : `${monthDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`,
+        isCurrent: isCurrentMonth,
+      };
+    }
+
+    if (filterMode === 'YEAR') {
+      const isCurrentYear = new Date().getFullYear() === yearAnchor;
+      return {
+        startDate: `${yearAnchor}-01-01`,
+        endDate: `${yearAnchor}-12-31`,
+        title: `Year ${yearAnchor}`,
+        subtitle: `Jan 01, ${yearAnchor} – Dec 31, ${yearAnchor}`,
+        isCurrent: isCurrentYear,
+      };
+    }
+
+    // CUSTOM
+    const diffDays = Math.max(
+      1,
+      Math.round(
+        (parseDateString(customRange.end).getTime() - parseDateString(customRange.start).getTime()) /
+          (1000 * 60 * 60 * 24)
+      ) + 1
+    );
+    const startD = parseDateString(customRange.start);
+    const endD = parseDateString(customRange.end);
+    return {
+      startDate: customRange.start,
+      endDate: customRange.end,
+      title: `${startD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${endD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+      subtitle: `Custom Filter • ${diffDays} Days Range`,
+      isCurrent: customRange.end === todayStr,
+    };
+  }, [filterMode, selectedDay, weekAnchor, monthAnchor, yearAnchor, customRange, todayStr]);
+
+  // Load Data
+  const inFlightRef = React.useRef(false);
   const loadData = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
-      const [todaySum, history, prof] = await Promise.all([
-        waterService.getTodaySummary(),
-        waterService.getWeeklyHistory().catch(() => []),
-        profileService.getProfile().catch(() => null),
-      ]);
-      setSummary(todaySum);
-      setWeeklyHistory(history);
+      const prof = await profileService.getProfile().catch(() => null);
       if (prof) setProfile(prof);
+
+      if (filterMode === 'DAY') {
+        const todaySum = await waterService.getTodaySummary(activePeriod.startDate);
+        setSummary(todaySum);
+        setRangeSummary(null);
+      } else {
+        const rangeRes = await waterService.getRangeSummary(activePeriod.startDate, activePeriod.endDate);
+        setRangeSummary(rangeRes);
+        setSummary(null);
+      }
     } catch (err: any) {
       console.warn('Failed to load water data:', err.message);
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [filterMode, activePeriod.startDate, activePeriod.endDate]);
 
   useEffect(() => {
     loadData();
@@ -100,6 +248,68 @@ export default function WaterTrackerScreen() {
     loadData();
   };
 
+  // Stepper handlers (< and >)
+  const handlePrevPeriod = () => {
+    if (filterMode === 'DAY') {
+      const cur = parseDateString(selectedDay);
+      cur.setDate(cur.getDate() - 1);
+      setSelectedDay(toDateString(cur));
+    } else if (filterMode === 'WEEK') {
+      const cur = parseDateString(weekAnchor);
+      cur.setDate(cur.getDate() - 7);
+      setWeekAnchor(toDateString(cur));
+    } else if (filterMode === 'MONTH') {
+      const [y, m] = monthAnchor.split('-').map(Number);
+      const cur = new Date(y, m - 2, 1);
+      setMonthAnchor(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`);
+    } else if (filterMode === 'YEAR') {
+      setYearAnchor((prev) => prev - 1);
+    }
+  };
+
+  const handleNextPeriod = () => {
+    if (activePeriod.isCurrent) return;
+
+    if (filterMode === 'DAY') {
+      const cur = parseDateString(selectedDay);
+      cur.setDate(cur.getDate() + 1);
+      const nextStr = toDateString(cur);
+      if (nextStr <= todayStr) setSelectedDay(nextStr);
+    } else if (filterMode === 'WEEK') {
+      const cur = parseDateString(weekAnchor);
+      cur.setDate(cur.getDate() + 7);
+      setWeekAnchor(toDateString(cur));
+    } else if (filterMode === 'MONTH') {
+      const [y, m] = monthAnchor.split('-').map(Number);
+      const cur = new Date(y, m, 1);
+      const nextYM = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
+      if (nextYM <= todayStr.substring(0, 7)) setMonthAnchor(nextYM);
+    } else if (filterMode === 'YEAR') {
+      if (yearAnchor < new Date().getFullYear()) setYearAnchor((prev) => prev + 1);
+    }
+  };
+
+  const handleGoToday = () => {
+    setSelectedDay(todayStr);
+    setWeekAnchor(todayStr);
+    setMonthAnchor(todayStr.substring(0, 7));
+    setYearAnchor(new Date().getFullYear());
+  };
+
+  const handleApplyCalendar = (start: string, end: string, mode: 'DAY' | 'WEEK' | 'CUSTOM') => {
+    if (mode === 'DAY') {
+      setFilterMode('DAY');
+      setSelectedDay(start);
+    } else if (mode === 'WEEK') {
+      setFilterMode('WEEK');
+      setWeekAnchor(start);
+    } else {
+      setFilterMode('CUSTOM');
+      setCustomRange({ start, end });
+    }
+    setCalendarModalVisible(false);
+  };
+
   const handleQuickAdd = async (amountMl: number) => {
     try {
       setSubmitting(true);
@@ -107,6 +317,7 @@ export default function WaterTrackerScreen() {
         amountMl,
         beverageType: 'WATER',
         beverageName: 'Water',
+        dateString: activePeriod.startDate,
       });
       await loadData();
     } catch (err: any) {
@@ -129,6 +340,7 @@ export default function WaterTrackerScreen() {
         amountMl: ml,
         beverageType: selectedType,
         beverageName: beverageName.trim() || undefined,
+        dateString: activePeriod.startDate,
       });
       setShowAddModal(false);
       setCustomAmount('');
@@ -160,15 +372,25 @@ export default function WaterTrackerScreen() {
     ]);
   };
 
+  // Metrics computation
+  const isDayMode = filterMode === 'DAY';
   const targetMl = profile?.preferredWaterIntakeMl || summary?.targetMl || 2500;
-  const currentMl = summary?.totalConsumedMl ?? summary?.totalAmountMl ?? 0;
-  const progressPct = Math.min(100, Math.round((currentMl / targetMl) * 100));
-  const remainingMl = Math.max(0, targetMl - currentMl);
-  const isGoalAchieved = summary?.isGoalAchieved ?? progressPct >= 100;
+  const periodTargetMl = isDayMode ? targetMl : (rangeSummary?.periodTargetMl || targetMl * (rangeSummary?.daysCount || 1));
+  const currentMl = isDayMode
+    ? (summary?.totalConsumedMl ?? summary?.totalAmountMl ?? 0)
+    : (rangeSummary?.totalConsumedMl || 0);
+  const progressPct = isDayMode
+    ? Math.min(100, Math.round((currentMl / (targetMl || 1)) * 100))
+    : (rangeSummary?.progressPercentage || 0);
+  const remainingMl = Math.max(0, periodTargetMl - currentMl);
+  const isGoalAchieved = isDayMode ? progressPct >= 100 : (rangeSummary?.daysGoalAchieved || 0) > 0;
+  const avgDailyMl = isDayMode ? currentMl : (rangeSummary?.avgDailyMl || 0);
+
+  const logsList: WaterLogDto[] = isDayMode ? (summary?.logs || []) : (rangeSummary?.logs || []);
 
   return (
     <View style={styles.container}>
-      <AppHeader title="Water & Hydration" />
+      <AppHeader title="Water & Hydration" showBack onBackPress={() => router.back()} />
 
       <ScrollView
         style={styles.scroll}
@@ -176,6 +398,25 @@ export default function WaterTrackerScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[WATER_COLOR]} />}
         showsVerticalScrollIndicator={false}
       >
+        {/* Unified Period Filter Bar */}
+        <PeriodFilterBar
+          activeMode={filterMode}
+          onModeChange={(mode) => {
+            setFilterMode(mode);
+            if (mode === 'CUSTOM') setCalendarModalVisible(true);
+          }}
+          title={activePeriod.title}
+          subtitle={activePeriod.subtitle}
+          isCurrentPeriod={activePeriod.isCurrent}
+          onPrev={handlePrevPeriod}
+          onNext={handleNextPeriod}
+          onOpenCalendar={() => setCalendarModalVisible(true)}
+          onGoToday={handleGoToday}
+          accentColor={WATER_COLOR}
+          accentLightBg={WATER_BG_LIGHT}
+          accentBorder={WATER_BORDER}
+        />
+
         {/* Main Hydration Progress Card */}
         <View style={styles.heroCard}>
           <View style={styles.heroHeader}>
@@ -183,8 +424,8 @@ export default function WaterTrackerScreen() {
               <Droplets size={24} color={WATER_COLOR} />
             </View>
             <View style={styles.heroHeaderText}>
-              <Text style={styles.heroTitle}>Today's Hydration</Text>
-              <Text style={styles.heroSubtitle}>Target: {targetMl.toLocaleString()} ml</Text>
+              <Text style={styles.heroTitle}>{isDayMode ? `${activePeriod.title}'s Hydration` : 'Period Hydration'}</Text>
+              <Text style={styles.heroSubtitle}>Target: {periodTargetMl.toLocaleString()} ml</Text>
             </View>
             <View style={styles.percentBadge}>
               <Text style={styles.percentBadgeText}>{progressPct}%</Text>
@@ -194,7 +435,7 @@ export default function WaterTrackerScreen() {
           {/* Big Number Progress */}
           <View style={styles.bigNumberRow}>
             <Text style={styles.currentNumber}>{currentMl.toLocaleString()}</Text>
-            <Text style={styles.totalUnitText}> / {targetMl.toLocaleString()} ml</Text>
+            <Text style={styles.totalUnitText}> / {periodTargetMl.toLocaleString()} ml</Text>
           </View>
 
           {/* Linear Progress Bar */}
@@ -204,13 +445,19 @@ export default function WaterTrackerScreen() {
 
           <View style={styles.statsRow}>
             <View style={styles.statBox}>
-              <Text style={styles.statLabel}>Remaining</Text>
-              <Text style={styles.statValue}>{remainingMl.toLocaleString()} ml</Text>
+              <Text style={styles.statLabel}>{isDayMode ? 'Remaining' : 'Daily Avg'}</Text>
+              <Text style={styles.statValue}>
+                {isDayMode ? `${remainingMl.toLocaleString()} ml` : `${avgDailyMl.toLocaleString()} ml`}
+              </Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statBox}>
-              <Text style={styles.statLabel}>Plain Water</Text>
-              <Text style={styles.statValue}>{summary?.totalWaterMl ?? summary?.plainWaterMl ?? 0} ml</Text>
+              <Text style={styles.statLabel}>{isDayMode ? 'Plain Water' : 'Goal Met Days'}</Text>
+              <Text style={styles.statValue}>
+                {isDayMode
+                  ? `${summary?.totalWaterMl ?? summary?.plainWaterMl ?? 0} ml`
+                  : `${rangeSummary?.daysGoalAchieved || 0} / ${rangeSummary?.daysCount || 1}d`}
+              </Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statBox}>
@@ -221,70 +468,61 @@ export default function WaterTrackerScreen() {
                   { color: isGoalAchieved ? '#16A34A' : WATER_COLOR },
                 ]}
               >
-                {isGoalAchieved ? 'Goal Met' : `${progressPct}% Done`}
+                {isDayMode ? (isGoalAchieved ? 'Goal Met' : `${progressPct}% Done`) : `${progressPct}% Met`}
               </Text>
             </View>
           </View>
         </View>
 
-        {/* Quick Add Presets */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Quick Add Presets</Text>
-          <TouchableOpacity
-            style={styles.customAddBtn}
-            onPress={() => setShowAddModal(true)}
-            activeOpacity={0.75}
-          >
-            <Plus size={15} color={WATER_COLOR} />
-            <Text style={styles.customAddBtnText}>Custom</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Quick Add Presets (Only on Day Mode for Today or past day logging) */}
+        {isDayMode && (
+          <>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Quick Add Presets</Text>
+              <TouchableOpacity
+                style={styles.customAddBtn}
+                onPress={() => setShowAddModal(true)}
+                activeOpacity={0.75}
+              >
+                <Plus size={15} color={WATER_COLOR} />
+                <Text style={styles.customAddBtnText}>Custom</Text>
+              </TouchableOpacity>
+            </View>
 
-        <View style={styles.quickGrid}>
-          {QUICK_AMOUNTS.map((item) => (
-            <TouchableOpacity
-              key={item.amount}
-              style={styles.quickCard}
-              onPress={() => handleQuickAdd(item.amount)}
-              disabled={submitting}
-              activeOpacity={0.7}
-            >
-              <View style={styles.quickIconCircle}>
-                <Droplets size={20} color={WATER_COLOR} />
-              </View>
-              <Text style={styles.quickLabel}>{item.label}</Text>
-              <Text style={styles.quickAmount}>+{item.desc}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+            <View style={styles.quickGrid}>
+              {QUICK_AMOUNTS.map((item) => (
+                <TouchableOpacity
+                  key={item.amount}
+                  style={styles.quickCard}
+                  onPress={() => handleQuickAdd(item.amount)}
+                  disabled={submitting}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.quickIconCircle}>
+                    <Droplets size={20} color={WATER_COLOR} />
+                  </View>
+                  <Text style={styles.quickLabel}>{item.label}</Text>
+                  <Text style={styles.quickAmount}>+{item.desc}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
 
-        {/* Weekly Hydration Trend */}
-        {weeklyHistory.length > 0 && (
+        {/* Beverage Distribution Card (For Week/Month/Year/Custom) */}
+        {!isDayMode && rangeSummary?.beverageBreakdown && (
           <View style={styles.trendCard}>
             <View style={styles.trendHeader}>
-              <TrendingUp size={18} color={WATER_COLOR} />
-              <Text style={styles.trendTitle}>Weekly Hydration Trend</Text>
+              <PieChart size={18} color={WATER_COLOR} />
+              <Text style={styles.trendTitle}>Beverage Distribution</Text>
             </View>
-            <View style={styles.chartContainer}>
-              {weeklyHistory.map((day: any, idx: number) => {
-                const consumed = day.consumedMl ?? day.totalConsumedMl ?? day.totalAmountMl ?? 0;
-                const dayTarget = day.targetMl || 2500;
-                const dayPct = Math.min(100, Math.round((consumed / dayTarget) * 100));
-                const dayLabel = day.date ? new Date(day.date).toLocaleDateString('en-US', { weekday: 'narrow' }) : `${idx + 1}`;
-                const achieved = day.achieved ?? day.isGoalAchieved ?? dayPct >= 100;
+            <View style={styles.bevGrid}>
+              {Object.entries(rangeSummary.beverageBreakdown).map(([bevKey, amount]) => {
+                const label = bevKey.replace('_', ' ');
                 return (
-                  <View key={day.date || idx} style={styles.barCol}>
-                    <Text style={styles.barValueText}>{consumed > 0 ? `${(consumed / 1000).toFixed(1)}L` : ''}</Text>
-                    <View style={styles.barTrack}>
-                      <View
-                        style={[
-                          styles.barFill,
-                          { height: `${Math.max(8, dayPct)}%` },
-                          achieved && { backgroundColor: '#16A34A' },
-                        ]}
-                      />
-                    </View>
-                    <Text style={styles.barDayText}>{dayLabel}</Text>
+                  <View key={bevKey} style={styles.bevItem}>
+                    <Text style={styles.bevLabel}>{label}</Text>
+                    <Text style={styles.bevValue}>{amount.toLocaleString()} ml</Text>
                   </View>
                 );
               })}
@@ -292,27 +530,64 @@ export default function WaterTrackerScreen() {
           </View>
         )}
 
-        {/* Today's Intake Log */}
+        {/* Period Hydration Breakdown Chart */}
+        {!isDayMode && rangeSummary?.dailyBreakdown && rangeSummary.dailyBreakdown.length > 0 && (
+          <View style={styles.trendCard}>
+            <View style={styles.trendHeader}>
+              <TrendingUp size={18} color={WATER_COLOR} />
+              <Text style={styles.trendTitle}>Daily Hydration Breakdown</Text>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chartScroll}>
+              <View style={styles.chartContainer}>
+                {rangeSummary.dailyBreakdown.map((day, idx) => {
+                  const consumed = day.totalConsumedMl || 0;
+                  const dayTarget = day.targetMl || 2500;
+                  const dayPct = Math.min(100, Math.round((consumed / dayTarget) * 100));
+                  return (
+                    <View key={day.date || idx} style={styles.barCol}>
+                      <Text style={styles.barValueText}>{consumed > 0 ? `${(consumed / 1000).toFixed(1)}L` : ''}</Text>
+                      <View style={styles.barTrack}>
+                        <View
+                          style={[
+                            styles.barFill,
+                            { height: `${Math.max(8, dayPct)}%` },
+                            day.achieved && { backgroundColor: '#16A34A' },
+                          ]}
+                        />
+                      </View>
+                      <Text style={styles.barDayText}>{day.label}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          </View>
+        )}
+
+        {/* Intake Logs List */}
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Today's Logs ({summary?.logs?.length || 0})</Text>
+          <Text style={styles.sectionTitle}>
+            {isDayMode ? `${activePeriod.title}'s Logs` : 'Period Logs'} ({logsList.length})
+          </Text>
         </View>
 
         {loading ? (
           <ActivityIndicator color={WATER_COLOR} style={{ marginVertical: 20 }} />
-        ) : !summary?.logs || summary.logs.length === 0 ? (
+        ) : logsList.length === 0 ? (
           <View style={styles.emptyState}>
             <Droplets size={36} color={colors.secondaryText} style={{ opacity: 0.5 }} />
-            <Text style={styles.emptyTitle}>No water logs recorded today</Text>
-            <Text style={styles.emptySubtitle}>Tap a quick preset above to log your first drink!</Text>
+            <Text style={styles.emptyTitle}>No hydration logged for this period</Text>
+            <Text style={styles.emptySubtitle}>Tap a quick preset above or select another period</Text>
           </View>
         ) : (
           <View style={styles.logList}>
-            {summary.logs.map((log: WaterLogDto) => {
+            {logsList.map((log: WaterLogDto) => {
               const logId = log._id || log.id || Math.random().toString();
               const amount = log.quantityMl || log.amountMl || 0;
               const timeStr = (log.recordedAt || log.loggedAt)
                 ? new Date(log.recordedAt || log.loggedAt!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : 'Just now';
+                : 'Recorded';
+              const dateBadge = log.dateString ? ` • ${log.dateString}` : '';
               return (
                 <View key={logId} style={styles.logItem}>
                   <View style={styles.logLeft}>
@@ -329,19 +604,21 @@ export default function WaterTrackerScreen() {
                       </Text>
                       <View style={styles.logMetaRow}>
                         <Clock size={12} color={colors.secondaryText} />
-                        <Text style={styles.logTimeText}>{timeStr}</Text>
+                        <Text style={styles.logTimeText}>{timeStr}{!isDayMode ? dateBadge : ''}</Text>
                       </View>
                     </View>
                   </View>
                   <View style={styles.logRight}>
                     <Text style={styles.logAmount}>+{amount} ml</Text>
-                    <TouchableOpacity
-                      onPress={() => handleDeleteLog(logId)}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      style={styles.deleteBtn}
-                    >
-                      <Trash2 size={16} color="#EF4444" />
-                    </TouchableOpacity>
+                    {isDayMode && (
+                      <TouchableOpacity
+                        onPress={() => handleDeleteLog(logId)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        style={styles.deleteBtn}
+                      >
+                        <Trash2 size={16} color="#EF4444" />
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
               );
@@ -349,6 +626,18 @@ export default function WaterTrackerScreen() {
           </View>
         )}
       </ScrollView>
+
+      {/* Interactive Calendar Modal */}
+      <InteractiveCalendarModal
+        visible={calendarModalVisible}
+        onClose={() => setCalendarModalVisible(false)}
+        initialStartDate={activePeriod.startDate}
+        initialEndDate={activePeriod.endDate}
+        initialMode={filterMode === 'DAY' ? 'DAY' : filterMode === 'WEEK' ? 'WEEK' : 'RANGE'}
+        onApply={handleApplyCalendar}
+        accentColor={WATER_COLOR}
+        accentLightBg={WATER_BG_LIGHT}
+      />
 
       {/* Custom Add Modal */}
       <Modal visible={showAddModal} transparent animationType="slide">
@@ -361,7 +650,6 @@ export default function WaterTrackerScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Quantity Input */}
             <Text style={styles.inputLabel}>Water / Beverage Volume (ml)</Text>
             <View style={styles.inputWrapper}>
               <TextInput
@@ -376,7 +664,6 @@ export default function WaterTrackerScreen() {
               <Text style={styles.unitSuffix}>ml</Text>
             </View>
 
-            {/* Beverage Type Selection */}
             <Text style={styles.inputLabel}>Beverage Type</Text>
             <View style={styles.typeGrid}>
               {BEVERAGE_TYPES.map((b) => (
@@ -397,7 +684,6 @@ export default function WaterTrackerScreen() {
               ))}
             </View>
 
-            {/* Optional Custom Name */}
             {selectedType !== 'WATER' && (
               <>
                 <Text style={styles.inputLabel}>Name / Note (Optional)</Text>
@@ -448,10 +734,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: WATER_BORDER,
     marginBottom: 20,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8 },
-      android: { elevation: 2 },
-    }),
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
   },
   heroHeader: {
     flexDirection: 'row',
@@ -459,8 +746,8 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   heroIconBox: {
-    width: 46,
-    height: 46,
+    width: 44,
+    height: 44,
     borderRadius: 12,
     backgroundColor: WATER_BG_LIGHT,
     justifyContent: 'center',
@@ -471,7 +758,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   heroTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
     color: colors.primaryText,
   },
@@ -482,14 +769,14 @@ const styles = StyleSheet.create({
   },
   percentBadge: {
     backgroundColor: WATER_BG_LIGHT,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: WATER_BORDER,
   },
   percentBadgeText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
     color: WATER_COLOR,
   },
@@ -504,16 +791,17 @@ const styles = StyleSheet.create({
     color: colors.primaryText,
   },
   totalUnitText: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
     color: colors.secondaryText,
+    fontWeight: '500',
+    marginLeft: 4,
   },
   progressTrack: {
-    height: 12,
-    backgroundColor: '#E2E8F0',
+    height: 10,
+    backgroundColor: '#F1F5F9',
     borderRadius: 6,
     overflow: 'hidden',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   progressFill: {
     height: '100%',
@@ -522,22 +810,18 @@ const styles = StyleSheet.create({
   },
   statsRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 14,
-    padding: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
   },
   statBox: {
     flex: 1,
     alignItems: 'center',
   },
-  statDivider: {
-    width: 1,
-    backgroundColor: '#E2E8F0',
-    marginVertical: 4,
-  },
   statLabel: {
-    fontSize: 11,
+    fontSize: 12,
     color: colors.secondaryText,
     marginBottom: 2,
   },
@@ -546,12 +830,16 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.primaryText,
   },
+  statDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#F1F5F9',
+  },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
-    marginTop: 4,
   },
   sectionTitle: {
     fontSize: 16,
@@ -561,11 +849,13 @@ const styles = StyleSheet.create({
   customAddBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
     backgroundColor: WATER_BG_LIGHT,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: WATER_BORDER,
+    gap: 4,
   },
   customAddBtnText: {
     fontSize: 13,
@@ -574,38 +864,38 @@ const styles = StyleSheet.create({
   },
   quickGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
+    justifyContent: 'space-between',
     marginBottom: 20,
+    gap: 8,
   },
   quickCard: {
     flex: 1,
-    minWidth: '45%',
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 14,
+    borderRadius: 14,
+    padding: 12,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
   quickIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: WATER_BG_LIGHT,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 8,
   },
   quickLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.primaryText,
+    fontSize: 11,
+    color: colors.secondaryText,
+    fontWeight: '500',
+    textAlign: 'center',
   },
   quickAmount: {
     fontSize: 12,
-    color: WATER_COLOR,
     fontWeight: '700',
+    color: WATER_COLOR,
     marginTop: 2,
   },
   trendCard: {
@@ -627,28 +917,55 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.primaryText,
   },
+  bevGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  bevItem: {
+    flex: 1,
+    minWidth: '45%',
+    backgroundColor: WATER_BG_LIGHT,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: WATER_BORDER,
+  },
+  bevLabel: {
+    fontSize: 12,
+    color: colors.secondaryText,
+    textTransform: 'capitalize',
+    marginBottom: 4,
+  },
+  bevValue: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: WATER_COLOR,
+  },
+  chartScroll: {
+    paddingRight: 10,
+  },
   chartContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'flex-end',
-    height: 120,
-    paddingTop: 10,
+    height: 140,
+    gap: 12,
+    paddingTop: 20,
+    paddingBottom: 6,
   },
   barCol: {
-    flex: 1,
     alignItems: 'center',
-    height: '100%',
-    justifyContent: 'flex-end',
+    minWidth: 32,
   },
   barValueText: {
-    fontSize: 9,
-    fontWeight: '600',
+    fontSize: 10,
     color: colors.secondaryText,
     marginBottom: 4,
+    fontWeight: '600',
   },
   barTrack: {
     width: 14,
-    height: 80,
+    height: 90,
     backgroundColor: '#F1F5F9',
     borderRadius: 7,
     justifyContent: 'flex-end',
@@ -662,19 +979,41 @@ const styles = StyleSheet.create({
   barDayText: {
     fontSize: 11,
     color: colors.secondaryText,
-    marginTop: 6,
     fontWeight: '600',
+    marginTop: 6,
+  },
+  emptyState: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 30,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 20,
+  },
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.primaryText,
+    marginTop: 12,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    color: colors.secondaryText,
+    marginTop: 4,
+    textAlign: 'center',
   },
   logList: {
     gap: 10,
+    marginBottom: 20,
   },
   logItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    padding: 14,
     borderRadius: 14,
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
@@ -682,18 +1021,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    flex: 1,
   },
   logIconBox: {
     width: 38,
     height: 38,
-    borderRadius: 10,
+    borderRadius: 12,
     backgroundColor: WATER_BG_LIGHT,
     justifyContent: 'center',
     alignItems: 'center',
   },
   logName: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
     color: colors.primaryText,
   },
   logMetaRow: {
@@ -703,7 +1043,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   logTimeText: {
-    fontSize: 11,
+    fontSize: 12,
     color: colors.secondaryText,
   },
   logRight: {
@@ -712,32 +1052,12 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   logAmount: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '700',
     color: WATER_COLOR,
   },
   deleteBtn: {
     padding: 4,
-  },
-  emptyState: {
-    alignItems: 'center',
-    padding: 30,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  emptyTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.primaryText,
-    marginTop: 8,
-  },
-  emptySubtitle: {
-    fontSize: 12,
-    color: colors.secondaryText,
-    marginTop: 4,
-    textAlign: 'center',
   },
   modalOverlay: {
     flex: 1,
@@ -748,8 +1068,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 24,
-    maxHeight: '80%',
+    padding: 20,
+    paddingBottom: 36,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -765,16 +1085,15 @@ const styles = StyleSheet.create({
   inputLabel: {
     fontSize: 13,
     fontWeight: '600',
-    color: colors.secondaryText,
+    color: colors.primaryText,
     marginBottom: 8,
   },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#CBD5E1',
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
     paddingHorizontal: 14,
     marginBottom: 16,
   },
@@ -799,26 +1118,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: '#F1F5F9',
     borderWidth: 1,
     borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
   },
   typePillActive: {
     backgroundColor: WATER_BG_LIGHT,
     borderColor: WATER_COLOR,
   },
   typePillText: {
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 13,
     color: colors.secondaryText,
+    fontWeight: '500',
   },
   typePillTextActive: {
     color: WATER_COLOR,
+    fontWeight: '700',
   },
   submitBtn: {
-    backgroundColor: colors.primary,
-    height: 50,
-    borderRadius: 14,
+    backgroundColor: WATER_COLOR,
+    height: 48,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 8,

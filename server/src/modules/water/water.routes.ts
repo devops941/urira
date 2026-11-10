@@ -9,6 +9,7 @@ router.use(requireAuth);
 
 router.post('/', controller.addWater);
 router.get('/today', controller.getTodaySummary);
+router.get('/range', controller.getRangeSummary);
 router.get('/summary', controller.getWeeklySummary);
 router.get('/history', controller.getHistory);
 router.get('/goal', controller.getGoal);

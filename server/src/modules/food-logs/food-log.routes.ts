@@ -11,6 +11,7 @@ router.use(requireAuth);
 router.post('/', controller.addFoodLog);
 router.get('/today', controller.getTodayLogs);
 router.get('/history', controller.getHistory);
+router.get('/range', controller.getRangeSummary);
 router.get('/:id', controller.getLogById);
 router.patch('/:id', controller.updateFoodLog);
 router.delete('/:id', controller.deleteFoodLog);

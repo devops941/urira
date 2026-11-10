@@ -1,5 +1,10 @@
 import { apiClient } from '../api/axiosInstance';
-import { IFoodLog, INutritionSummary, MealType } from '../../types/nutrition';
+import {
+  IFoodLog,
+  INutritionSummary,
+  IFoodLogRangeSummary,
+  MealType,
+} from '../../types/nutrition';
 
 export const foodLogService = {
   async addFoodLog(input: {
@@ -20,6 +25,11 @@ export const foodLogService = {
     logs: IFoodLog[];
   }> {
     const res = await apiClient.get('/food-logs/today');
+    return res.data.data;
+  },
+
+  async getRangeSummary(startDate: string, endDate: string): Promise<IFoodLogRangeSummary> {
+    const res = await apiClient.get(`/food-logs/range?startDate=${startDate}&endDate=${endDate}`);
     return res.data.data;
   },
 

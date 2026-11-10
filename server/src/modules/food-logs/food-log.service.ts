@@ -177,5 +177,153 @@ export class FoodLogService {
 
     return { success: deleted, date: dateString, summary };
   }
+
+  /**
+   * Get aggregated Nutrition Range summary for Day / Week / Month / Year / Custom filters
+   */
+  async getRangeSummary(userId: string, startDate: string, endDate: string) {
+    const logs = await this.foodLogRepo.findByDateRange(userId, startDate, endDate);
+
+    const startObj = new Date(startDate);
+    const endObj = new Date(endDate);
+    const diffDays = Math.max(
+      1,
+      Math.round((endObj.getTime() - startObj.getTime()) / (1000 * 60 * 60 * 24)) + 1
+    );
+
+    let totalCalories = 0;
+    let totalProteinGrams = 0;
+    let totalCarbsGrams = 0;
+    let totalFatGrams = 0;
+    let totalFiberGrams = 0;
+
+    const mealStats: Record<string, { count: number; calories: number }> = {
+      BREAKFAST: { count: 0, calories: 0 },
+      MORNING_SNACK: { count: 0, calories: 0 },
+      LUNCH: { count: 0, calories: 0 },
+      EVENING_SNACK: { count: 0, calories: 0 },
+      DINNER: { count: 0, calories: 0 },
+      OTHER: { count: 0, calories: 0 },
+    };
+
+    const dayMap = new Map<
+      string,
+      { calories: number; protein: number; carbs: number; fat: number; count: number }
+    >();
+
+    for (const log of logs) {
+      const cals = log.calculatedNutrition?.calories || 0;
+      const prot = log.calculatedNutrition?.protein || 0;
+      const carb = log.calculatedNutrition?.carbohydrates || 0;
+      const fat = log.calculatedNutrition?.fat || 0;
+      const fiber = log.calculatedNutrition?.fiber || 0;
+
+      totalCalories += cals;
+      totalProteinGrams += prot;
+      totalCarbsGrams += carb;
+      totalFatGrams += fat;
+      totalFiberGrams += fiber;
+
+      const mType = log.mealType || 'OTHER';
+      if (!mealStats[mType]) {
+        mealStats[mType] = { count: 0, calories: 0 };
+      }
+      mealStats[mType].count += 1;
+      mealStats[mType].calories += cals;
+
+      const dStr = log.dateString || this.getDateString(new Date(log.consumedAt));
+      const curDay = dayMap.get(dStr) || { calories: 0, protein: 0, carbs: 0, fat: 0, count: 0 };
+      curDay.calories += cals;
+      curDay.protein += prot;
+      curDay.carbs += carb;
+      curDay.fat += fat;
+      curDay.count += 1;
+      dayMap.set(dStr, curDay);
+    }
+
+    const avgDailyCalories = Math.round(totalCalories / diffDays);
+    const avgDailyProtein = Math.round((totalProteinGrams / diffDays) * 10) / 10;
+    const avgDailyCarbs = Math.round((totalCarbsGrams / diffDays) * 10) / 10;
+    const avgDailyFat = Math.round((totalFatGrams / diffDays) * 10) / 10;
+
+    const dailyBreakdown: Array<{
+      date: string;
+      label: string;
+      calories: number;
+      protein: number;
+      carbs: number;
+      fat: number;
+      loggedMealsCount: number;
+    }> = [];
+
+    if (diffDays <= 35) {
+      const cur = new Date(startObj);
+      while (cur <= endObj) {
+        const dStr = this.getDateString(cur);
+        const dayStat = dayMap.get(dStr) || { calories: 0, protein: 0, carbs: 0, fat: 0, count: 0 };
+        const label = cur.toLocaleDateString('en-US', { weekday: 'narrow' });
+        dailyBreakdown.push({
+          date: dStr,
+          label,
+          calories: Math.round(dayStat.calories),
+          protein: Math.round(dayStat.protein * 10) / 10,
+          carbs: Math.round(dayStat.carbs * 10) / 10,
+          fat: Math.round(dayStat.fat * 10) / 10,
+          loggedMealsCount: dayStat.count,
+        });
+        cur.setDate(cur.getDate() + 1);
+      }
+    } else {
+      const monthMap = new Map<
+        string,
+        { calories: number; protein: number; carbs: number; fat: number; count: number }
+      >();
+      for (const [dStr, stat] of dayMap.entries()) {
+        const ym = dStr.substring(0, 7);
+        const curM = monthMap.get(ym) || { calories: 0, protein: 0, carbs: 0, fat: 0, count: 0 };
+        curM.calories += stat.calories;
+        curM.protein += stat.protein;
+        curM.carbs += stat.carbs;
+        curM.fat += stat.fat;
+        curM.count += stat.count;
+        monthMap.set(ym, curM);
+      }
+
+      const startYear = parseInt(startDate.substring(0, 4), 10);
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      for (let m = 1; m <= 12; m++) {
+        const mPad = m < 10 ? `0${m}` : `${m}`;
+        const ym = `${startYear}-${mPad}`;
+        const curM = monthMap.get(ym) || { calories: 0, protein: 0, carbs: 0, fat: 0, count: 0 };
+        dailyBreakdown.push({
+          date: `${ym}-01`,
+          label: monthNames[m - 1],
+          calories: Math.round(curM.calories),
+          protein: Math.round(curM.protein * 10) / 10,
+          carbs: Math.round(curM.carbs * 10) / 10,
+          fat: Math.round(curM.fat * 10) / 10,
+          loggedMealsCount: curM.count,
+        });
+      }
+    }
+
+    return {
+      startDate,
+      endDate,
+      daysCount: diffDays,
+      totalCalories: Math.round(totalCalories),
+      avgDailyCalories,
+      totalProteinGrams: Math.round(totalProteinGrams * 10) / 10,
+      totalCarbsGrams: Math.round(totalCarbsGrams * 10) / 10,
+      totalFatGrams: Math.round(totalFatGrams * 10) / 10,
+      totalFiberGrams: Math.round(totalFiberGrams * 10) / 10,
+      avgDailyProtein,
+      avgDailyCarbs,
+      avgDailyFat,
+      mealBreakdown: mealStats,
+      dailyBreakdown,
+      logs,
+    };
+  }
 }
 

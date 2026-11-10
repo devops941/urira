@@ -3,6 +3,7 @@ import {
   IActivityTodaySummary,
   IWeeklyActivity,
   IActivityRecord,
+  IActivityRangeSummary,
   ActivitySource,
 } from '../../types/wellness';
 
@@ -15,18 +16,28 @@ export const activityService = {
     estimatedCalories?: number;
     source?: ActivitySource;
     notes?: string;
+    dateString?: string;
   }): Promise<{ record: IActivityRecord; todaySummary: IActivityTodaySummary }> {
     const res = await apiClient.post('/activity', data);
     return res.data.data;
   },
 
-  async getTodaySummary(): Promise<IActivityTodaySummary> {
-    const res = await apiClient.get('/activity/today');
+  async getTodaySummary(dateString?: string): Promise<IActivityTodaySummary> {
+    const res = await apiClient.get('/activity/today', {
+      params: dateString ? { date: dateString } : undefined,
+    });
     return res.data.data;
   },
 
   async getWeeklyTrends(): Promise<IWeeklyActivity> {
     const res = await apiClient.get('/activity/weekly');
+    return res.data.data;
+  },
+
+  async getRangeSummary(startDate?: string, endDate?: string): Promise<IActivityRangeSummary> {
+    const res = await apiClient.get('/activity/range', {
+      params: { startDate, endDate },
+    });
     return res.data.data;
   },
 

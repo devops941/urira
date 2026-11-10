@@ -45,6 +45,7 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
+      "./plugins/withStepCounterNative",
       [
         "expo-notifications",
         {

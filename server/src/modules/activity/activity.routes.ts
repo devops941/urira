@@ -10,6 +10,7 @@ router.use(requireAuth);
 router.post('/', controller.addActivity);
 router.get('/today', controller.getTodaySummary);
 router.get('/weekly', controller.getWeeklyTrends);
+router.get('/range', controller.getRangeSummary);
 router.get('/history', controller.getHistory);
 router.patch('/:id', controller.updateActivity);
 router.delete('/:id', controller.deleteActivity);
