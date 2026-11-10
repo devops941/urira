@@ -77,6 +77,7 @@ export function HomeLiveWalkingCard({
   const [cadenceSpm, setCadenceSpm] = useState(0);
   const [autoTracking, setAutoTracking] = useState(true);
   const [isCadenceLocked, setIsCadenceLocked] = useState(false);
+  const [sensorSource, setSensorSource] = useState<'HARDWARE_STEP_COUNTER' | 'SOFTWARE_FALLBACK'>('HARDWARE_STEP_COUNTER');
 
   // Pulse animation for LIVE badge
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -112,6 +113,7 @@ export function HomeLiveWalkingCard({
         setCalories((prev) => Math.max(prev, event.caloriesBurned));
         if (event.cadenceSpm !== undefined) setCadenceSpm(event.cadenceSpm);
         if (event.cadenceLocked !== undefined) setIsCadenceLocked(event.cadenceLocked);
+        if (event.sensorSource !== undefined) setSensorSource(event.sensorSource);
       }
     );
 
@@ -178,7 +180,13 @@ export function HomeLiveWalkingCard({
                 ]}
               />
               <Text style={[styles.liveText, { color: autoTracking ? '#16A34A' : '#94A3B8' }]}>
-                {autoTracking ? (isCadenceLocked ? 'WALKING DETECTED' : 'LIVE PEDOMETER') : 'STANDBY'}
+                {autoTracking
+                  ? sensorSource === 'HARDWARE_STEP_COUNTER'
+                    ? 'GOOGLE HEALTH SENSOR'
+                    : isCadenceLocked
+                    ? 'WALKING DETECTED'
+                    : 'LIVE PEDOMETER'
+                  : 'STANDBY'}
               </Text>
             </View>
             <Text style={styles.cardTitle}>Live Walking Tracker</Text>
